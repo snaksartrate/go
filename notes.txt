@@ -1,0 +1,17 @@
+black plays first lmao
+
+environment -> a board / a position, number of stones each player has, number of captures made by each players
+move_gen -> place a stone, pass
+
+so the agent function gets the environment as the input and returns a value from the move_gen function as the output
+
+train using rl
+
+heuristic is going to be
+number of squares covered, number of captures, score
+score will come into play once both players have passed
+
+use minimax,
+
+use bfs
+in bfs, limit to a beam width of n, where n = number of intersections on an edge, choose best n options
