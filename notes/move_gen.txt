@@ -1,0 +1,29 @@
+so for move generation i will have to first get pseudolegal moves
+then i remove illegal ones
+then i return the list i guess?
+
+now python is notorious with using the original objects and not their copies
+so first study that
+
+i have this structure -> position { board { grid, notation } }
+i wanna manipulate the grid and the notation
+so create copies of notations, replace an underscore at a time with a stone {1, 2} and construct a board object from that notation
+append, repeat, and return
+
+sorting and searching for which move first is a different thing altogether, not my job over here
+or shall i do that
+
+okay so first check which moves shall be given priority
+like checks captures in chess, what in go? atari? ko? non ko?
+
+
+
+
+
+
+okay, the copy thing is sorted
+just make a new board
+
+i am deleting notation as an attribute
+managing two things aint worth it
+rather def get_notation(position : Position) -> str:
