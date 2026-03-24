@@ -13,5 +13,55 @@ score will come into play once both players have passed
 
 use minimax,
 
-use bfs
+use dfs
 in bfs, limit to a beam width of n, where n = number of intersections on an edge, choose best n options
+
+
+
+
+
+
+
+
+
+
+
+
+### 1. **Game Environment (Core)**
+
+* Board (9×9 or 13×13 → IMPORTANT, not 19×19)
+* Legal moves
+* Captures, liberties, ko
+
+
+### 3. **Heuristic Function**
+
+
+```text
+Evaluation =
+  territory_estimate
++ captures
++ liberties (important!!)
+```
+
+# 🏗️ Final Architecture (THIS is your project)
+
+```text
+Go Engine Project
+
+1. Game State
+   - Board
+   - Rules
+
+2. Move Generator
+
+3. Heuristic Evaluation
+
+4. Agents:
+   A. Minimax Agent (with alpha-beta)
+   B. MCTS Agent (main)
+
+5. (Optional)
+   - Beam Search Agent
+   - RL improvement
+```
