@@ -5,7 +5,7 @@ move_gen -> place a stone, pass
 
 so the agent function gets the environment as the input and returns a value from the move_gen function as the output
 
-train using rl
+train using rl (...sure? ...or mcts?)
 
 heuristic is going to be
 number of squares covered, number of captures, score
@@ -25,24 +25,23 @@ in bfs, limit to a beam width of n, where n = number of intersections on an edge
 
 
 
+so i have a board ready
+i have moved notation out of the way, and definied a funciton to get notation whenever i want
+now i suppose i shall use numpy arrays to represent board grids since i wanna send those as inputs
+...also, shall i put feature analysis?
 
 
-### 1. **Game Environment (Core)**
-
-* Board (9×9 or 13×13 → IMPORTANT, not 19×19)
-* Legal moves
-* Captures, liberties, ko
 
 
-### 3. **Heuristic Function**
 
 
-```text
-Evaluation =
-  territory_estimate
-+ captures
-+ liberties (important!!)
-```
+
+
+for heuristic function, i will use territories covered, liberties, captures
+priority moves to be checked will be _______? (maybe atari n captures n stuff)
+
+
+
 
 # 🏗️ Final Architecture (THIS is your project)
 

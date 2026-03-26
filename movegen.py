@@ -23,3 +23,5 @@ def move_gen_white(board : Board):
 
 def move_gen(position : Position):
     pseudo_legal = move_gen_black(position.board) if position.black_to_play else move_gen_white(position.board)
+
+
