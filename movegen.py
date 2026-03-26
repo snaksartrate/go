@@ -1,27 +1,22 @@
 from environment import Position, Board
 
-def get_pseudo_legal_black(board : Board):
-    pseudo_legal = []
-    for intersection in board.grid:
-        if intersection == 0:
-            intersection = 1
+def get_pseudo_legal(board : Board, black_to_play : bool) -> list:
+    pseudo_legal = [board] # if the player decides to pass
+    stone = 1 if black_to_play else 2
+    board_size = len(board.grid)
+    for i in range(board_size * board_size):
+        if not board.grid[i]:
+            board.grid[i] = stone
             pseudo_legal.append(board.copy())
-            intersection = 0
+            board.grid[i] = 0
     return pseudo_legal
 
-def move_gen_black(board : Board):
-    pseudo_legal = []
-    for intersection in board.grid:
-        if intersection == 0:
-            intersection = 1
-            pseudo_legal.append(board)
-            intersection = 0
+def validate(pseudo_legal : list, black_to_play : bool) -> list:
+    for i in range(len(pseudo_legal)):
+        # perform validity checks, remove invalid moves
+        pass
     return pseudo_legal
-
-def move_gen_white(board : Board):
-    return []
 
 def move_gen(position : Position):
-    pseudo_legal = move_gen_black(position.board) if position.black_to_play else move_gen_white(position.board)
-
-
+    pseudo_legal = get_pseudo_legal(position.black_to_play, position.black_to_play)
+    moves = validate(pseudo_legal, position.black_to_play)
