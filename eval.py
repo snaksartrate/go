@@ -4,10 +4,7 @@ from constants import board_size
 def adjacent(source : int) -> list:
     adj = [source + 1, source - 1, source + board_size, source - board_size]
     limit = board_size * board_size
-    for i in (0, 1, 2, 3):
-        if 0 > adj[i] or adj[i] > limit:
-            adj.pop(i)
-    return adj
+    return [a for a in adj if 0 <= a and a < limit]
 
 def dfs(grid : list, source : int) -> set:
     colour = grid[source]
@@ -19,6 +16,7 @@ def dfs(grid : list, source : int) -> set:
         curr = stack.pop()
         for adj in adjacent(curr):
             if grid[adj] == colour and adj not in visited:
+                visited.add(adj)
                 stack.append(adj)
                 unit.add(adj)
     return unit
@@ -30,7 +28,7 @@ def generate_liberties(unit : Unit, grid : list):
                 unit.liberties.add(adj)
     unit.liberty_count = len(unit.liberties)
 
-def get_units(board : Board) -> set:
+def get_units(board : Board) -> tuple[set[Unit], set[Unit]]:
     board_size = len(board.grid)
     black_units = set()
     white_units = set()
