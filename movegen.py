@@ -11,8 +11,8 @@ def get_pseudo_legal(board : Board) -> list:
             pseudo_legal.append(i)
     return pseudo_legal
 
-def make_a_move(board : Board, move : int, black_to_play : bool) -> Position: # remove this function later. it is so fucking redundant.
-    board.grid[move] = 1 if black_to_play else -1
+# def make_a_move(board : Board, move : int, black_to_play : bool) -> Position: # remove this function later. it is so fucking redundant.
+#     board.grid[move] = 1 if black_to_play else -1
 
 def validate(position : Position, pseudo_legal : list, black_to_play : bool) -> list:
     # check for pseudo_legal[0] -> the "pass" move, after the for loop
@@ -20,7 +20,7 @@ def validate(position : Position, pseudo_legal : list, black_to_play : bool) -> 
     for i in range(1, len(pseudo_legal)):
         # perform validity checks, remove invalid moves
         new_position = deepcopy(position)
-        make_a_move(new_position.board, pseudo_legal[i], black_to_play)
+        new_position.board.grid[pseudo_legal[i]] = 1 if black_to_play else -1 # make_a_move(new_position.board, pseudo_legal[i], black_to_play) # look at that function above, that redundant fucker
         new_position.black_units, new_position.white_units = get_units(new_position.board)
         if black_to_play:
             for unit in new_position.black_units:
