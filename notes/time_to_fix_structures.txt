@@ -1,0 +1,35 @@
+step 1 -> move all utility functions aside
+i will classify functions as utility functions if the only variables required are those from constants.py and those passed as parameters
+since they are not asking for any fancy data structures to be checked like position board move unit and what not
+
+utility functions have been moved aside
+
+step 2 -> go through the code for new bugs
+
+class Unit has been fixed
+class Board has been fixed
+class Move didnt require any fixes
+
+okay so class position needs to have 
+the board as a member
+the player -> true for black, false for white
+an evaluation score (the heuristic)
+the parent (because that is how check ko function will check it)
+the children (just a sorted list of moves) -> the next moves (no need to check ko because move gen checks that already)
+
+fixed :check:
+
+
+so the environment.py file is done
+
+
+
+
+now movegen
+okay that file is fit asf :check:
+
+
+
+
+eval has literally nothing
+there fore code ready to be pushed
