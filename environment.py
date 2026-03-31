@@ -14,7 +14,7 @@ class Unit:
         return len(self.liberties)
 
 class Board:
-    def __init__(self, notation : str, black_units : set[Unit], white_units : set[Unit]):
+    def __init__(self, notation : str):
         self.grid = [0 for _ in range(board_size * board_size)]
         if notation and uf.is_valid_notation(notation):
             for i in range(board_size * board_size):
@@ -60,12 +60,12 @@ class Move:
         self.capture = capture
 
 class Position:
-    def __init__(self, notation : str, player : bool, score : float, parent : Position, children : list[Move]):
+    def __init__(self, notation : str, player : bool, score : float, parent: "Position" | None = None, children: list["Move"] | None = None):
         self.board = Board(notation)
         self.black_to_play = player
         self.eval = score
         self.parent = parent
-        self.children = children # hopefully sorted
+        self.children = children if children is not None else [] # hopefully sorted
 
     @property
     def notation(self) -> str:
