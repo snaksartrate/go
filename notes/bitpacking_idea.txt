@@ -1,0 +1,5 @@
+right now, for the board, each individual intersection / point is defined as an int which might be 32 or 64 bits depending upon the system.
+i only need 2 bits to represent each intersection -> {(-1, 'w', '11'), (0, '_', '00'), (1, 'b', '01')}      // (current int value, piece colour, 2-bit value)
+since the board is going to have odd board_side_length, therefore number of intersections = (2 * n + 1) ^ 2 = (4 * k + 1)
+therefore, i need to represent 4k + 1 bits
+so a npint8 datatype would be best

@@ -3,7 +3,6 @@ from copy import deepcopy
 from environment import Position, Board, Unit, Move
 from eval import adjacent, get_units
 
-# this function belongs to movegen file
 def get_pseudo_legal(board : Board) -> list:
     pseudo_legal = [None] # if the player decides to pass
     board_size = len(board.grid)
@@ -12,48 +11,59 @@ def get_pseudo_legal(board : Board) -> list:
             pseudo_legal.append(Move(i))
     return pseudo_legal
 
-# def make_a_move(board : Board, move : int, black_to_play : bool) -> Position: # remove this function later. it is so fucking redundant.
-#     board.grid[move] = 1 if black_to_play else -1
+def perform_captures(board : Board, black_to_play : bool): # deletes the stone which can be captured
+    black_units, white_units = board.get_units()
+    remove_captured_ones_from = white_units if black_to_play else black_units
+    for unit in remove_captured_ones_from:
+        if not unit.liberty_count:
+            for point in unit.points:
+                board.grid[point] = 0
 
+def make_a_move(board : Board, black_to_play : bool, move : Move) -> Board:
+    board.grid[move.move] = 0 if move == None else (1 if black_to_play else -1)
+    perform_captures(board, black_to_play)
+    return board
 
-# this function belongs to movegen file
 def remove_suicides(board : Board, pseudo_legal : list[Move], black_to_play : bool) -> list[int]:
-    # check for pseudo_legal[0] -> the "pass" move, after the for loop
+    # if i pass, i wont be able to suicide, simple. so just skip pseudo_legal[0]
     illegal_moves = set()
     for i in range(1, len(pseudo_legal)):
-        # perform validity checks, remove invalid moves
-        new_board = deepcopy(board)
-        new_board.grid[pseudo_legal[i].move] = 1 if black_to_play else -1 # make_a_move(new_position.board, pseudo_legal[i], black_to_play) # look at that function above, that redundant fucker
-        new_board.black_units, new_board.white_units = get_units(new_board)
+        new_board = board.copy()
+        new_board = make_a_move(new_board, pseudo_legal[i], black_to_play)
+        black_units, white_units = new_board.get_units()
         is_suicide = False
         if black_to_play:
-            for unit in new_board.black_units:
+            for unit in black_units:
                 if not unit.liberty_count:
                     is_suicide = True
         else:
-            for unit in new_board.white_units:
+            for unit in white_units:
                 if not unit.liberty_count:
                     is_suicide = True
         if is_suicide:
             if black_to_play:
-                for unit in new_board.white_units:
+                for unit in white_units:
                     if any(cell in unit for cell in adjacent(pseudo_legal[i].move)) and not unit.liberty_count:
                         is_suicide = False
                         break
             else:
-                for unit in new_board.black_units:
+                for unit in black_units:
                     if any(cell in unit for cell in adjacent(pseudo_legal[i].move)):
                         if unit.liberty_count == 0:
                             is_suicide = False
                             break
         if is_suicide:
             illegal_moves.add(pseudo_legal[i])
-        # are more checks still left? -> no. these are the only legality checks. if you die. if you kill instead of dying, it is legal.
-        # nigga yes. check ko is left
     return [move for move in pseudo_legal if move not in illegal_moves]
 
 def check_ko(position : Position, pseudo_legal : list[Move], black_to_play : bool) -> list[int]:
-    return pseudo_legal
+    illegal_moves = set()
+    for move in pseudo_legal:
+        new_position = Position(position.board.copy())
+        if position.parent == make_a_move(new_position, move):
+            illegal_moves.add(move)
+    new_position = make_a_move(position)
+    return [move for move in pseudo_legal if move not in illegal_moves]
 
 def validate(position : Position, pseudo_legal : list[Move], black_to_play : bool) -> list[int]:
     pseudo_legal = remove_suicides(position.board, pseudo_legal, black_to_play)
