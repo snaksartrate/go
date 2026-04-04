@@ -1,8 +1,16 @@
 board_size = 9
 komi = 6.5
-mp = {'w' : -1, '_' : 0, 'b' : 1}
-val = ('w', '_', 'b') # -1 corresponds to white on the grid, 0 to empty square, and 1 to black
-valid_notation_chars = ('_', 'w', 'b') # i dont know why i have two vars doing the same thing but i think i should keep it; also, i dont want to think about it
+
+# we will require this since we are now working on a new branch
+# 0 is blank, 1 is white, 2 is black
+
+ENCODE_MAP = [0b00, 0b01, 0b10]
+
+DECODE_MAP = {
+    0b00: 0,
+    0b01: 1,
+    0b10: 2
+}
 
 for_display_coords_x = [chr(ord('A') + i) for i in range(board_size)]
 for_display_coords_y = [str(i + 1) for i in range(board_size)]

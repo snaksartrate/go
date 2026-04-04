@@ -28,3 +28,11 @@ def dfs(grid : list, source : int) -> set[int]:
                 unit.add(adj)
     return unit
 
+def byte_bitpos(idx) -> tuple[int, int]:
+    byte_index = idx // 4
+    bit_offset = (idx % 4) * 2
+    return byte_index, bit_offset
+
+def index(row, col) -> int:
+    return row * board_size + col
+

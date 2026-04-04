@@ -3,3 +3,25 @@ i only need 2 bits to represent each intersection -> {(-1, 'w', '11'), (0, '_', 
 since the board is going to have odd board_side_length, therefore number of intersections = (2 * n + 1) ^ 2 = (4 * k + 1)
 therefore, i need to represent 4k + 1 bits
 so a npint8 datatype would be best
+
+
+
+
+okay nvm we have 2 bitboards now
+and the project has been restarted
+
+so a position needs to keep track of the board, the turn of a player, the score, and the parent
+should i keep children as a data member? that completes the tree strucutre but due to a massive branching factor, im not completely sure of the extra space that would be used
+
+the position will have two bitboards
+
+now to get the piece at a particular row and col, i calculate the index of the intersection in a flattened arrauy
+so its either get(row = r, col = c) or get(index = i)
+if get(row = r, col = c) is called, index becomes none and we just do index = row * board_size + col
+now, bit_row = index // 8 and bit_col = index % 8
+so we have three cases -> either there is a black stone, or there is a white stone, or there are no stones
+
+so if (colour_board[bit row] >> bit col) & np.uint8(1) then the piece of that colour exists over there # the parentheses are important since & has a higher precedence than >>
+so therefore bit row moves left to right while bit col moves right to left
+
+fun fact, earlier i had to worry about 4k+1, now its 8k+1 since (2n+1)^2mod8 is (4(k^2+k)+1)mod8 which is (4*even+1)mod8
