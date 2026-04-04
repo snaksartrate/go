@@ -1,10 +1,10 @@
 from copy import deepcopy
 import numpy as np
 
-from environment import Position, BitBoard, Unit, Move
+from environment import Position, BitBoard, Move
 from eval import adjacent, get_units
 
-def get_pseudo_legal(board : BitBoard) -> list[np.int16]: # 9 LSB show the square where we place a stone; range goes from 0-360, both included; MSB for whether a capture or not
+def get_pseudo_legal(board : BitBoard) -> list[Move]: # 9 LSB show the square where we place a stone; range goes from 0-360, both included; MSB for whether a capture or not
     pseudo_legal = [None] # if the player decides to pass
     board_size = len(board.grid)
     for i in range(board_size * board_size):
@@ -67,6 +67,9 @@ def remove_ko(position : Position, pseudo_legal : list[Move]) -> list[int]:
     new_position = make_a_move(position)
     return [move for move in pseudo_legal if move not in illegal_moves]
 
+def give_attributes_to(moves : list[Move], position : Position) -> list[Move]:
+    return moves
+
 def sort_moves(moves : list[Move]) -> None:
     pass
 
@@ -74,5 +77,6 @@ def move_gen(position : Position):
     moves = get_pseudo_legal(position.bitboard)
     moves = remove_suicides(position.bitboard, moves, position.black_to_play)
     moves = remove_ko(position, moves)
+    moves = give_attributes_to(moves, position)
     sort_moves(moves)
     return moves

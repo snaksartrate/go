@@ -1,0 +1,29 @@
+fuck everything
+new start
+here are 7 criteria, based on which i will order a move
+    1. capturing moves
+    2. moves that put opponent in atari
+    3. moves that save your group from atari
+    4. connection moves
+    5. cutting moves
+    6. neutral moves
+    7. self-atari moves (last / prune)
+i will use a numpy.uint16 to represent a move
+move will be a separate class of its own
+it will support comparisons as well, since i want to use default python sorting function for the move list as writing it in python would result slow performance compared to cpython, lesgo
+so out of the 16 bits, the 7 MSBs will have those 7 criteria; MSB represents 1, MSB - 1 represents 2, and so on till MSB - 6
+there onwards, 9 bits are left and i will use them to store the move squares
+2^9 is 512 and therefore i can store 512 different moves (unsigned)
+i will have 362 moves at maximum (19 * 19 + pass)
+so all good, 16 bits properly utilised
+
+more systematically, true if :
+    bit 15 -> capture
+    bit 14 -> opponent atari
+    bit 13 -> save from atari
+    bit 12 -> cut opponent
+    bit 11 -> connect mine
+    bit 10 -> liberties increase # mine
+    bit 9  -> not self-atari # which is good
+    bits 0–8 -> move index # 9 bit unsigned int
+

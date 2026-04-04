@@ -1,4 +1,5 @@
 import numpy as np
+from functools import total_ordering
 
 import constants as C
 import utility_functions as uf
@@ -45,6 +46,36 @@ class BitBoard:
     #         for c in range(board_size):
     #             row.append(symbols[self.get(r, c)])
     #         print(' '.join(row))
+
+@total_ordering
+class Move:
+    def __init__(self, index : int, captures_opponent : bool, puts_opponent_in_atari : bool, saves_me_from_atari : bool, cuts_opponents_groups : bool, connects_my_groups : bool, increases_my_liberties : bool, is_not_self_atari : bool):
+        self.val = np.uint16(index)
+        if captures_opponent:
+            self.val |= 1 << 15
+        if puts_opponent_in_atari:
+            self.val |= 1 << 14
+        if saves_me_from_atari:
+            self.val |= 1 << 13
+        if cuts_opponents_groups:
+            self.val |= 1 << 12
+        if connects_my_groups:
+            self.val |= 1 << 11
+        if increases_my_liberties:
+            self.val |= 1 << 10
+        if is_not_self_atari:
+            self.val |= 1 << 9
+    
+    def __eq__(self, other):
+        return (self.val >> 9) == (other.val >> 9)
+
+    def __lt__(self, other):
+        return (self.val >> 9) < (other.val >> 9)
+    
+    def __repr__(self):
+        priority = int(self.val >> 9)
+        index = int(self.val & 0x1FF) # yes this function is AI, I was making a lot of bugs, finally understood it :p
+        return f"priority = {priority}, index = {index}"
 
 class Position:
     def __init__(self):
