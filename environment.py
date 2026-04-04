@@ -3,7 +3,6 @@ from functools import total_ordering
 
 import constants as C
 import utility_functions as uf
-import errors
 
 board_size = C.board_size
 encode_map = C.ENCODE_MAP
@@ -23,9 +22,6 @@ class BitBoard:
             return 1
         return 0
     
-    # def get_rc(self, row : int, col : int) -> int:
-    #     return self.get(row * board_size + col)
-    
     def set(self, index : int, black : bool):
         bit_row = index // 8
         bit_col = index % 8
@@ -36,6 +32,9 @@ class BitBoard:
         else:
             self.white[bit_row] |= 1 << bit_col
 
+    # def get_rc(self, row : int, col : int) -> int:
+    #     return self.get(row * board_size + col)
+    
     # def set_rc(self, row : int, col : int, black : bool):
     #     self.set(row * board_size + col, black)
 
@@ -49,7 +48,7 @@ class BitBoard:
 
 @total_ordering
 class Move:
-    def __init__(self, index : int, captures_opponent : bool, puts_opponent_in_atari : bool, saves_me_from_atari : bool, cuts_opponents_groups : bool, connects_my_groups : bool, increases_my_liberties : bool, is_not_self_atari : bool):
+    def __init__(self, index : int, captures_opponent : bool | None = None, puts_opponent_in_atari : bool | None = None, saves_me_from_atari : bool | None = None, cuts_opponents_groups : bool | None = None, connects_my_groups : bool | None = None, increases_my_liberties : bool | None = None, is_not_self_atari : bool | None = None):
         self.val = np.uint16(index)
         if captures_opponent:
             self.val |= 1 << 15
@@ -74,15 +73,43 @@ class Move:
     
     def __repr__(self):
         priority = int(self.val >> 9)
-        index = int(self.val & 0x1FF) # yes this function is AI, I was making a lot of bugs, finally understood it :p
+        index = int(self.val & 0x1FF) # yes this line is AI, I was making a lot of bugs, finally understood it :p
         return f"priority = {priority}, index = {index}"
+    
+    def captures_opponent(self, b : bool):
+        if b:
+            self.val |= 1 << 15
 
+    def puts_opponent_in_atari(self, b : bool):
+        if b:
+            self.val |= 1 << 14
+
+    def saves_me_from_atari(self, b : bool):
+        if b:
+            self.val |= 1 << 13
+
+    def cuts_opponents_groups(self, b : bool):
+        if b:
+            self.val |= 1 << 12
+
+    def connects_my_groups(self, b : bool):
+        if b:
+            self.val |= 1 << 11
+
+    def increases_my_liberties(self, b : bool):
+        if b:
+            self.val |= 1 << 10
+
+    def is_not_self_atari(self, b : bool):
+        if b:
+            self.val |= 1 << 9
+    
 class Position:
     def __init__(self):
         self.bitboard = BitBoard()
         self.black_to_play = True
         self.parent = id[Position]
-        self.previous_move = int
+        self.previous_move = Move
 
 # import sys
 # print(sys.getsizeof(BitBoard()))
