@@ -31,12 +31,27 @@ class BitBoard:
             self.black[bit_row] |= 1 << bit_col
         else:
             self.white[bit_row] |= 1 << bit_col
+    
+    def empty(self, index : int):
+        bit_row = index // 8
+        bit_col = index % 8
+        self.black[bit_row] &= ~(1 << bit_col)
 
     # def get_rc(self, row : int, col : int) -> int:
     #     return self.get(row * board_size + col)
     
     # def set_rc(self, row : int, col : int, black : bool):
     #     self.set(row * board_size + col, black)
+
+    # def empty_rc(self, row : int, col : int):
+    #     self.empty(row * board_size + col)
+
+    def copy(self):
+        new_board = BitBoard()
+        for i in range(board_size * board_size):
+            if self.get(i):
+                new_board.set(i, self.get(i) - 1)
+        return new_board
 
     # def display(self):
     #     symbols = ('.', 'W', 'B')
@@ -105,11 +120,11 @@ class Move:
             self.val |= 1 << 9
     
 class Position:
-    def __init__(self):
-        self.bitboard = BitBoard()
-        self.black_to_play = True
-        self.parent = id[Position]
-        self.previous_move = Move
+    def __init__(self, board : BitBoard, black_to_play : bool, prev, move : np.uint16):
+        self.bitboard = board if board is not None else BitBoard()
+        self.black_to_play = black_to_play
+        self.parent = prev
+        self.previous_move = move
 
 # import sys
 # print(sys.getsizeof(BitBoard()))

@@ -27,3 +27,22 @@ more systematically, true if :
     bit 9  -> not self-atari # which is good
     bits 0–8 -> move index # 9 bit unsigned int
 
+
+
+
+checklist
+1. move_gen func fixed
+2. pseudo_legal func fixed
+3. remove_suicides
+4. remove_ko
+5. give_attributes
+6. sort
+7. make_a_move fized
+8. perform_captures fized
+
+
+
+
+
+i have decided to abolish moves as a class
+they will remain np.uint16
