@@ -8,6 +8,7 @@ from eval import adjacent, get_units
 board_size = C.board_size
 visited = [False] * (board_size * board_size)
 liberties = [0] * (board_size * board_size)
+NULL_MOVE = np.uint16(0x1FF)
 
 if True:
     def check_captures_opponent(position : Position, moves : list[np.uint16]):
@@ -32,7 +33,7 @@ if True:
         pass
 
 def get_pseudo_legal(board : BitBoard) -> list[Move]: # 9 LSB show the square where we place a stone; range goes from 0-360, both included; MSB for whether a capture or not
-    pseudo_legal = [None] # if the player decides to pass
+    pseudo_legal = []
     for i in range(board_size * board_size):
         if not board.get(i):
             pseudo_legal.append(Move(i))
@@ -140,4 +141,5 @@ def move_gen(position : Position) -> list[np.uint16]:
     moves = remove_ko(position, moves)
     moves = give_attributes_to(moves, position)
     sort_moves(moves)
+    moves.append(NULL_MOVE)
     return moves

@@ -46,3 +46,14 @@ checklist
 
 i have decided to abolish moves as a class
 they will remain np.uint16
+
+
+       111111111 = 1 + 2 + 4 + ... 256 = 511
+________________ -> np.uint16
+|||||||____ not self atari = true
+||||||_____ increase my liberties = true
+|||||______ connects my groups = true
+||||_______ cuts opponents groups = true
+|||________ saves me from atari = true
+||_________ puts opponent in atari = true
+|__________ captures opponents stone = true
