@@ -56,4 +56,4 @@ ________________ -> np.uint16
 ||||_______ cuts opponents groups = true
 |||________ saves me from atari = true
 ||_________ puts opponent in atari = true
-|__________ captures opponents stone = true
+|__________ captures opponents stone = true021

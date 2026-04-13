@@ -1,0 +1,33 @@
+'''
+board_size is a system variable, an odd int <= 19
+def adjacent(a : int) -> tuple[int]:
+	l = [a + 1, a - 1, a + board_size, a - board_size]
+	return tuple([p for p in l if 0 <= p and p < board_size * board_size])
+
+Board is a class
+data members -> black : list[np.uint8], white : list[np.uint8]
+methods -> get(a : int) -> int: just return some int for now in the range [0, board_size * board_size)
+'''
+
+def is_suicide(board : Board, move : np.uint16, black_to_play : bool) -> bool:
+	move_index = int(0x1FF & move)
+	for a in adjacent(move_index):
+		if not board.get(move_index):
+			return False
+	btp = black_to_play
+	stone = 2 if btp else 1
+	opp_stone = 1 if btp else 2
+	for a in adjacent(move_index): # check for your own stone being captured
+		if board.get(a) == stone:
+			# begin dfs
+			# stack = [a]; visited = [False] * board_size * board_size; visited[a] = True;
+			# if not board.get(curr):
+			# 	return False
+	for a in adjacent(move_index): # check for opponent's stone being captured # the name of this for loop is charizard
+		if board.get(a) == opp_stone:
+			# begin dfs
+			# stack = [a]; visited = [False] * board_size * board_size; visited[a] = True;
+				# if not board.get(curr):
+				# 	continue to next iteration of the for loop named charizard
+			return False
+	return True

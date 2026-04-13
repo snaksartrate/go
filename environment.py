@@ -1,12 +1,6 @@
 import numpy as np
-from functools import total_ordering
 
-import constants as C
-import utility_functions as uf
-
-board_size = C.board_size
-encode_map = C.ENCODE_MAP
-decode_map = C.DECODE_MAP
+from constants import board_size
 
 class BitBoard:
     def __init__(self):
@@ -61,64 +55,6 @@ class BitBoard:
     #             row.append(symbols[self.get(r, c)])
     #         print(' '.join(row))
 
-@total_ordering
-class Move:
-    def __init__(self, index : int, captures_opponent : bool | None = None, puts_opponent_in_atari : bool | None = None, saves_me_from_atari : bool | None = None, cuts_opponents_groups : bool | None = None, connects_my_groups : bool | None = None, increases_my_liberties : bool | None = None, is_not_self_atari : bool | None = None):
-        self.val = np.uint16(index)
-        if captures_opponent:
-            self.val |= 1 << 15
-        if puts_opponent_in_atari:
-            self.val |= 1 << 14
-        if saves_me_from_atari:
-            self.val |= 1 << 13
-        if cuts_opponents_groups:
-            self.val |= 1 << 12
-        if connects_my_groups:
-            self.val |= 1 << 11
-        if increases_my_liberties:
-            self.val |= 1 << 10
-        if is_not_self_atari:
-            self.val |= 1 << 9
-    
-    def __eq__(self, other):
-        return (self.val >> 9) == (other.val >> 9)
-
-    def __lt__(self, other):
-        return (self.val >> 9) < (other.val >> 9)
-    
-    def __repr__(self):
-        priority = int(self.val >> 9)
-        index = int(self.val & 0x1FF) # yes this line is AI, I was making a lot of bugs, finally understood it :p
-        return f"priority = {priority}, index = {index}"
-    
-    def captures_opponent(self, b : bool):
-        if b:
-            self.val |= 1 << 15
-
-    def puts_opponent_in_atari(self, b : bool):
-        if b:
-            self.val |= 1 << 14
-
-    def saves_me_from_atari(self, b : bool):
-        if b:
-            self.val |= 1 << 13
-
-    def cuts_opponents_groups(self, b : bool):
-        if b:
-            self.val |= 1 << 12
-
-    def connects_my_groups(self, b : bool):
-        if b:
-            self.val |= 1 << 11
-
-    def increases_my_liberties(self, b : bool):
-        if b:
-            self.val |= 1 << 10
-
-    def is_not_self_atari(self, b : bool):
-        if b:
-            self.val |= 1 << 9
-    
 class Position:
     def __init__(self, board : BitBoard, black_to_play : bool, prev, move : np.uint16):
         self.bitboard = board if board is not None else BitBoard()
