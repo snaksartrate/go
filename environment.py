@@ -55,8 +55,13 @@ class BitBoard:
     #             row.append(symbols[self.get(r, c)])
     #         print(' '.join(row))
 
+def __eq__(self, other):
+    if not isinstance(other, BitBoard):
+        return False
+    return np.array_equal(self.black, other.black) and np.array_equal(self.white, other.white)
+
 class Position:
-    def __init__(self, board : BitBoard, black_to_play : bool, prev, move : np.uint16):
+    def __init__(self, board : BitBoard, black_to_play : bool, prev : "Position | None", move : np.uint16):
         self.bitboard = board if board is not None else BitBoard()
         self.black_to_play = black_to_play
         self.parent = prev

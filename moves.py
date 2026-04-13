@@ -89,35 +89,55 @@ def perform_captures(board : BitBoard, black_to_play : bool) -> None:
     opp_stone = 3 - stone
     visited = [False] * (board_size * board_size)
     for i in range(board_size * board_size):
-        if not visited[i]:
+        if not visited[i] and board.get(i) == opp_stone:
             stack = [i]
             visited[i] = True
             n = 0 # number of liberties
             while stack:
                 curr = stack.pop()
-                for a in adjacent(stack):
+                for a in adjacent(curr):
                     val = board.get(a)
-                    if not val:
+                    if not val and not visited[a]:
                         n += 1
+                        visited[a] = True
                     elif val == opp_stone:
-                        p
+                        stack.append(a)
+                        visited[a] = True
+            if not n:
+                stack = [i]
+                board.empty(i)
+                while stack:
+                    curr = stack.pop()
+                    for a in adjacent(curr):
+                        val = board.get(a)
+                        if val == opp_stone:
+                            stack.append(a)
+                            board.empty(a)
+    return
 
 def make_a_move(position : Position, move : np.uint16) -> Position:
     black_to_play = not position.black_to_play
     new_position = Position(position.bitboard, black_to_play, position, move)
     new_position.bitboard.set(move, black_to_play)
-    perform_captures()
+    perform_captures(new_position.bitboard, black_to_play)
     return position
 
-def remove_ko(parent : Position, current : Position, moves : list[np.uint16]) -> list[np.uint16]:
-    pass
+def remove_ko(parent_board : BitBoard, current : Position, moves : list[np.uint16]) -> list[np.uint16]:
+    is_ko = [False] * (len(moves))
+    for i in range(len(moves)):
+        if parent_board == make_a_move(current, moves[i]).bitboard:
+            is_ko[i] = True
+    return [moves[i] for i in range(len(moves)) if not is_ko[i]]
 
-def assign_priority(moves : list[np.uint16]) -> list[np.uint16]:
+def assign_priority(position : Position, moves : list[np.uint16]) -> list[np.uint16]:
+    for i in range(len(moves)):
+        # perform checks
+        pass
     return np.sort(np.array(moves))[::-1].tolist()
 
 def move_gen(position : Position):
     moves = pseudo_legal(position.bitboard)
     moves = remove_suicides(position.bitboard, moves, position.black_to_play)
-    moves = remove_ko()
-    moves = assign_priority(moves)
+    moves = remove_ko(position.parent.bitboard, position, moves)
+    moves = assign_priority(position, moves)
     return moves
