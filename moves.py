@@ -69,12 +69,11 @@ def is_suicide(board : BitBoard, input_move : np.uint16, black_to_play : bool) -
                 if this_unit_isnt_dying:
                     break
             if not this_unit_isnt_dying:
+                move |= 0x8000 # 0b1000_0000_0000_0000 -> 0, 0, 0, and 0 * (1 + 2 + 4) + 1 * 8 = 8 # in hexadecimal
                 return False
     return True
 
 def remove_suicides(board : BitBoard, moves : list[np.uint16], black : bool) -> list[np.uint16]:
-    stone = 2 if black else 1
-    opp_stone = 1 if black else 2
     is_suicide_move = [False for _ in range(len(moves))]
     for i in range(len(moves)):
         move = moves[i]
@@ -128,6 +127,28 @@ def remove_ko(parent_board : BitBoard, current : Position, moves : list[np.uint1
         if parent_board == make_a_move(current, moves[i]).bitboard:
             is_ko[i] = True
     return [moves[i] for i in range(len(moves)) if not is_ko[i]]
+
+def check_capture(board : BitBoard, move : np.uint16) -> np.uint16:
+    if move & 0x8000:
+        return move
+    stone = board.get(move)
+    opp_stone = 3 - stone
+    visited = [False] * (board_size * board_size)
+    is_a_capture = True
+    for a in adjacent(move):
+        if board.get(a) == opp_stone:
+            stack = [a]
+            visited[a] = True
+            while not is_a_capture and stack:
+                curr = stack.pop()
+                for adj in adjacent(curr):
+                    if not board.get(adj):
+                        is_a_capture = False
+                        break
+                    if not visited[adj] and board.get(adj) == opp_stone:
+                        visited[adj] = True
+                        stack.append(adj)
+    return move | ((1 & is_a_capture) << 15)
 
 def assign_priority(position : Position, moves : list[np.uint16]) -> list[np.uint16]:
     for i in range(len(moves)):
