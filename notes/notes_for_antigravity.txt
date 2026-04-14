@@ -1,0 +1,29 @@
+this is an engine for go / weiqi / baduk
+the input will be a position as defined in environment.py
+the output will also be a position that will be evaluated as the best move
+
+constants.py stores system wide constants, can be tweaked manually inside the file if we want to run the game with different settings
+
+environment.py stores the environment, like position and board
+
+moves.py generates all legal moves and sorts them in theoretical order of importance, descending
+
+utility_functions.py stores functions that we may require multiple times and are completely independent of any class
+
+eval.py stores the game tree generation and alpha beta pruning and static evaluation, etc
+
+main.py stores the main function, which is the entry point of the program // again, a thing to be done after this like the gui
+
+now, the workflow is like this
+- receive a position
+- generate all legal moves
+- for each move, generate the resulting position
+- proceed to create a game tree recursively up to a certain depth
+- use alpha beta pruning algorithm to evaluate each resulting position
+- return the move that leads to the best position
+then this move will be applied to a position and the position will be returned
+
+now, there will be a gui, upon which we will work later
+the gui calls the engine with current position, and the returned position is then displayed
+the directories material and notes are used for reference
+

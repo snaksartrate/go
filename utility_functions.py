@@ -8,9 +8,14 @@ def is_valid_notation(notation : str, board_size = board_size) -> bool:
     return set(notation).issubset(C.valid_notation_chars)
 
 def adjacent(source : int) -> list[int]:
-    adj = [source + 1, source - 1, source + board_size, source - board_size]
+    adj = []
+    if source % board_size != board_size - 1:
+        adj.append(source + 1)
+    if source % board_size != 0:
+        adj.append(source - 1)
+    adj.extend([source + board_size, source - board_size])
     limit = board_size * board_size
-    return [a for a in adj if 0 <= a and a < limit]
+    return [a for a in adj if 0 <= a < limit]
 
 def dfs(grid : list, source : int) -> set[int]:
     colour = grid[source]

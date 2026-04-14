@@ -1,0 +1,38 @@
+# Review of Evaluation Workflow and Static Evaluation
+
+I have reviewed your `eval.txt` workflow. Decoupling the `pass` move completely out of `moves.py` and making it an inherent structural feature of the Alpha-Beta DFS is a solid architectural decision. 
+
+Here is my detailed review of both your workflow and your evaluation heuristic ideas.
+
+## 1. The Pass Move in Alpha-Beta Workflow
+
+**Pros:**
+- It keeps your `moves.py` bit-packing clean (100% board intersections).
+- It natively and cleanly handles the termination condition recursively. 
+
+**Cons / Architecture Tweaks:**
+- **Search Ordering (Important):** Alpha-Beta pruning is exceptionally dependent on move ordering. If you evaluate `pass` *first* at every single node, you will establish an artificially low/terrible bound during the mid-game (since passing mid-game is an awful play), significantly reducing your pruning efficiency. I heavily recommend evaluating `pass` *after* generating and evaluating the highest priority legal moves, or only if no good moves exist.
+- **Sentinel Value:** Instead of using `previous_move = None`, use an explicit constant like `PASS_MOVE = 0xFFFF` (or `361`). This prevents `NoneType` attribute errors down the line and makes the termination condition an extremely fast and safe integer comparison: `if pos.previous_move == PASS_MOVE and pos.parent.previous_move == PASS_MOVE: return score`.
+
+## 2. Feature Integration: Static Eval vs. Move Sorting
+
+It is crucial to distinguish between properties of a **Static State** and properties of a **Transition (Move)**:
+
+### What belongs in `static_eval(position)` 
+*(Evaluating the board as it sits, irrespective of the move played)*
+1. **Territory Estimation:** Perfect territory counting is far too slow for deep leaf nodes. Instead, use a lightweight **Influence Map**. Traverse empty spaces and quickly assess surrounding stones to determine rudimentary control.
+2. **Weak vs Strong Groups (Proximity):** You mentioned "proximity to weak groups." Statically, just map the liberties of all groups. Penalize the evaluation heavily if your groups have `1` or `2` liberties (weak). Reward the score for opponent groups with few liberties.
+3. **Total Captures:** **Crucial missing piece:** Your current `Position` and `BitBoard` objects *do not track total captured stones* over the duration of the game! You need to add a running tally to `Position` (e.g., `black_captures` tally). Inside `perform_captures` in `moves.py`, increment this tally based on the exact number of stones erased.
+
+### What belongs in `moves.py -> assign_priority`
+*(Evaluating the quality of the move itself to search it sooner)*
+1. **Shape Moves (jumps, diagonals):** The static evaluator shouldn't look for move "shapes" natively—that's inefficient. Instead, in `give_attributes()` inside `moves.py`, check the relative geometry of the move to nearby friendly stones. If it creates a beautiful shape, allocate a priority bit.
+2. **Size of Capture:** You suggested prioritizing a "capture of 5 stones". Since you have 9 free bits remaining in your `uint16` move wrapper, you can assign 3 bits to store the *number of stones captured*, forcing Alpha-Beta to always evaluate massive captures before 1-stone captures!
+3. **Endgame Value (Sente/Gote):** Sente generally means keeping the initiative. Moves that put the opponent in Atari are purely Sente. You are already handling this flawlessly by prioritizing `is_atari_on_opponent` via bit-shifting!
+
+## Next Steps
+To correctly funnel your ideas into the engine, here are the exact adjustments needed:
+1. Update `Position` instantiation to accept and track `prisoners_captured`.
+2. Update `perform_captures` to return the integer count of stones erased, and add it to the Position's tally.
+3. Draft the Alpha-Beta function inside `eval.py` using your `PASS_MOVE` logic.
+4. Draft `static_eval()` using the running tally + influence heuristics.

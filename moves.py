@@ -29,10 +29,11 @@ def is_suicide(board : BitBoard, input_move : np.uint16, black_to_play : bool) -
     visited[move] = True
     while stack:
         curr = stack.pop()
-        if not board.get(curr):
-            return False
         for a in adjacent(curr):
-            if not visited[a] and board.get(a) == stone:
+            val = board.get(a)
+            if not val:
+                return False
+            if not visited[a] and val == stone:
                 stack.append(a)
                 visited[a] = True
     # now i know that my stone / unit is surrounded
@@ -69,7 +70,6 @@ def is_suicide(board : BitBoard, input_move : np.uint16, black_to_play : bool) -
                 if this_unit_isnt_dying:
                     break
             if not this_unit_isnt_dying:
-                move |= 0x8000 # 0b1000_0000_0000_0000 -> 0, 0, 0, and 0 * (1 + 2 + 4) + 1 * 8 = 8 # in hexadecimal
                 return False
     return True
 
@@ -79,29 +79,30 @@ def remove_suicides(board : BitBoard, moves : list[np.uint16], black : bool) -> 
         move = moves[i]
         new_board = board.copy()
         new_board.set(move, black)
-        if is_suicide(new_board, move[i], black):
+        if is_suicide(new_board, move, black):
             is_suicide_move[i] = True
     return [moves[i] for i in range(len(moves)) if not is_suicide_move[i]]
 
 def perform_captures(board : BitBoard, black_to_play : bool) -> None:
     stone = 2 if black_to_play else 1
     opp_stone = 3 - stone
-    visited = [False] * (board_size * board_size)
+    stone_visited = [False] * (board_size * board_size)
     for i in range(board_size * board_size):
-        if not visited[i] and board.get(i) == opp_stone:
+        if not stone_visited[i] and board.get(i) == opp_stone:
             stack = [i]
-            visited[i] = True
+            stone_visited[i] = True
+            lib_visited = [False] * (board_size * board_size)
             n = 0 # number of liberties
             while stack:
                 curr = stack.pop()
                 for a in adjacent(curr):
                     val = board.get(a)
-                    if not val and not visited[a]:
+                    if not val and not lib_visited[a]:
                         n += 1
-                        visited[a] = True
-                    elif val == opp_stone:
+                        lib_visited[a] = True
+                    elif val == opp_stone and not stone_visited[a]:
                         stack.append(a)
-                        visited[a] = True
+                        stone_visited[a] = True
             if not n:
                 stack = [i]
                 board.empty(i)
@@ -115,11 +116,12 @@ def perform_captures(board : BitBoard, black_to_play : bool) -> None:
     return
 
 def make_a_move(position : Position, move : np.uint16) -> Position:
-    black_to_play = not position.black_to_play
-    new_position = Position(position.bitboard, black_to_play, position, move)
-    new_position.bitboard.set(move, black_to_play)
-    perform_captures(new_position.bitboard, black_to_play)
-    return position
+    black_to_play_next = not position.black_to_play
+    new_position = Position(position.bitboard.copy(), black_to_play_next, position, move)
+    if move != board_size * board_size:
+        new_position.bitboard.set(move, position.black_to_play)
+        perform_captures(new_position.bitboard, position.black_to_play)
+    return new_position
 
 def remove_ko(parent_board : BitBoard, current : Position, moves : list[np.uint16]) -> list[np.uint16]:
     is_ko = [False] * (len(moves))
@@ -181,7 +183,7 @@ def is_capture(position : Position, move : int) -> bool:
     stone = 2 if copied_position.black_to_play else 1
     opp_stone = 3 - stone
     copied_position.bitboard.set(move, copied_position.black_to_play)
-    perform_captures(copied_position.bitboard, copied_position.black_to_play)
+    # Check capture BEFORE removing the opponent's dead stones
     checked = set()
     for a in adjacent(move):
         if copied_position.bitboard.get(a) == opp_stone and a not in checked:

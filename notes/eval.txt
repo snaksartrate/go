@@ -1,0 +1,40 @@
+for evaluation, we recieve a position as an input
+then we proceed to call move_gen function from moves.py
+we have now obtained a list of children which we maintain for now
+now we use the make_a_move function from moves.py
+this begins our dfs using alpha beta pruning
+note ->  we have not included pass as a valid move in movegen function.
+
+
+for a node:
+- if depth == 0 or previous two moves were pass:
+    - evaluate the position using static evaluation function
+    - return the evaluation
+- else:
+    - generate a pass move:
+        - new position = Position(position.bitboard, not position.black_to_play, position, previous_move = None) # or previous_move = whatever you think would be logically the most correct
+        - evaluate new position
+        - this is our current best evaluation
+    - generate all legal moves
+    - for each move:
+        - generate the resulting position
+        - recursively call the evaluation function with depth - 1
+        - update the best move and best evaluation
+    - return the best move and best evaluation
+use alpha beta pruning for this evaluation
+
+
+for static evaluation, we are going to consider a linear combination of these factors:
+- number of squares covered by black
+- number of squares covered by white
+- captures by black
+- caotures by white
+- what else can you think of?
+
+
+how can we integrate these into the static evaluation function?
+- Size of capture / territory gain – a capture of 5 stones should rank higher than capturing 1 stone.
+- Proximity to opponent’s weak groups or playing in urgent areas.
+- Shape moves (e.g., one‑point jump, diagonal).
+- Endgame value (sente/gote).
+write your response inside notes/response_to_evaltxt.txt
