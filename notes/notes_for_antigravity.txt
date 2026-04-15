@@ -27,3 +27,22 @@ now, there will be a gui, upon which we will work later
 the gui calls the engine with current position, and the returned position is then displayed
 the directories material and notes are used for reference
 
+
+
+
+progress as of now
+- i have written moves.py and eval.py completely
+- perform a deep reasoning on their validity
+- if they are valid, proceed to write main.py
+- if not, correct them and then proceed to write main.py
+- engine/main.py or engine/__main__.py is going to be called for computation only
+
+further idea
+- so the user runs the main.py or __main__.py in the root directory go/
+- then it calls a board from go/gui/
+- now the gui is not a full fledged game application, it is just a board where a move is made and the computer then makes a move
+- it can store upto 5 of the previous games (just make some json named history.json and store 5 positions in that file along with details if you like)
+- so the board lets us place stones on intersections and performs captures, no animations required, just spawn and despawn pieces
+- maintain a track of number of captures and points per side
+
+now i want you to write engine/main.py or engine/__main__.py

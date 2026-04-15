@@ -1,0 +1,89 @@
+Core Idea of Go Scoring
+The goal is simple:
+Control more points (intersections) than your opponent
+
+1. Final Score (End of Game) # return this for if two consecutive moves were pass
+
+Territory Scoring
+
+Formula:
+Score = Territory + Captured Stones (prisoners) + Komi (white only)
+
+What counts:
+Territory = empty points surrounded by your stones
+Prisoners = stones you captured
+Komi = bonus for white (usually 6.5 or 7.5)
+
+Example
+If:
+Black has 40 territory
+Black captured 10 stones
+Black = 50
+
+White has 38 territory
+White captured 8 stones
+Komi = 6.5
+White = 52.5
+
+White wins by 2.5
+
+What Happens Before Counting?
+
+Before final scoring:
+
+1. Fill dame (neutral points)
+
+Points neither side controls
+These don’t count
+
+2. Both players pass → game ends
+
+
+Heuristic Evaluation (what engines do)
+You track:
+1. Territory (approximate)
+Which areas look enclosed?
+
+2. Captures so far
+Prisoner count
+
+3. Strength of groups
+Alive vs dead (eyes, liberties)
+
+Simple Evaluation Function (for your Go engine)
+You can do something like:
+```python
+score = (
+    estimated_territory_black
+    - estimated_territory_white
+    + captured_black
+    - captured_white
+)
+```
+
+---
+
+# 🏁 Summary (What YOU Should Implement)
+
+## ✅ During Game
+
+* Track:
+  * Captures (prisoners)
+  * Board state
+* Optional:
+  * Rough territory estimate
+
+---
+
+## ✅ End Game
+
+### Steps:
+
+1. Detect dead groups (or let players mark)
+2. Remove them → add to prisoners
+3. Count territory
+4. Add prisoners
+5. Add komi (white)
+6. Compare scores
+
+---

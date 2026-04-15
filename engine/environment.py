@@ -29,8 +29,8 @@ class BitBoard:
     def empty(self, index : int):
         bit_row = index // 8
         bit_col = index % 8
-        self.black[bit_row] &= ~(1 << bit_col)
-        self.white[bit_row] &= ~(1 << bit_col)
+        self.black[bit_row] &= ~np.uint8(1 << bit_col)
+        self.white[bit_row] &= ~np.uint8(1 << bit_col)
 
     # def get_rc(self, row : int, col : int) -> int:
     #     return self.get(row * board_size + col)
