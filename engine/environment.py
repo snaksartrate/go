@@ -70,12 +70,3 @@ class Position:
         self.black_prisoners = black_prisoners
         self.white_prisoners = white_prisoners
 
-# import sys
-# print(sys.getsizeof(BitBoard()))
-# print(sys.getsizeof(0))
-# print(sys.getsizeof(1))
-# print(sys.getsizeof(2))
-# print(sys.getsizeof('.'))
-# print(sys.getsizeof('w'))
-# print(sys.getsizeof('b'))
-
