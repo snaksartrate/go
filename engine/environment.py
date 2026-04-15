@@ -43,9 +43,8 @@ class BitBoard:
 
     def copy(self):
         new_board = BitBoard()
-        for i in range(board_size * board_size):
-            if self.get(i):
-                new_board.set(i, self.get(i) - 1)
+        new_board.black = self.black.copy()
+        new_board.white = self.white.copy()
         return new_board
 
     # def display(self):

@@ -170,14 +170,63 @@ def static_eval(position: Position) -> float:
 
 
 # ---------------------------------------------------------------------------
-# 3. Alpha-Beta Search
+# 3. Beam search helpers
+#    - Tier-based filtering: always keep tactical moves, limit the rest
+#    - Progressive widening: wider near root, narrower at leaves
+# ---------------------------------------------------------------------------
+
+def get_beam_width(depth: int, max_depth: int) -> int:
+    """Wider search near root, narrower at leaves."""
+    if depth >= max_depth - 1:   # near root
+        return 20
+    elif depth >= 2:
+        return 12
+    else:
+        return 8
+
+
+def filter_moves_by_tier(moves: list, beam_width: int) -> list:
+    """Keep all critical moves, limit others to beam_width total."""
+    tier1 = []   # Captures, ataris, saves  (bits 15, 14, 13)
+    tier2 = []   # Cuts, connects           (bits 12, 11)
+    tier3 = []   # Everything else
+
+    for m in moves:
+        if m & 0xE000:
+            tier1.append(m)
+        elif m & 0x1800:
+            tier2.append(m)
+        else:
+            tier3.append(m)
+
+    result = tier1 + tier2 + tier3
+    return result[:beam_width]
+
+
+# ---------------------------------------------------------------------------
+# 4. Transposition table  (bounded to avoid memory blow-up)
+# ---------------------------------------------------------------------------
+
+_transposition_table: dict = {}
+_TT_MAX_SIZE = 100_000
+
+
+def _tt_store(key, value):
+    if len(_transposition_table) >= _TT_MAX_SIZE:
+        _transposition_table.clear()   # simple eviction: wipe and start fresh
+    _transposition_table[key] = value
+
+
+# ---------------------------------------------------------------------------
+# 5. Alpha-Beta Search
 #    From eval.txt:
 #      - if previous two moves were pass  -> return final_score (not static_eval)
 #      - if depth == 0                    -> return static_eval
 #      - else: try all legal moves, then try pass as a last resort
 # ---------------------------------------------------------------------------
 
-def alpha_beta(position: Position, depth: int, alpha: float, beta: float) -> tuple[float, np.uint16]:
+def alpha_beta(position: Position, depth: int, alpha: float, beta: float,
+               max_depth: int = 3) -> tuple[float, np.uint16]:
     """
     Minimax search with Alpha-Beta pruning.
     Returns (best_evaluation_score, best_move_uint16).
@@ -189,26 +238,33 @@ def alpha_beta(position: Position, depth: int, alpha: float, beta: float) -> tup
         if position.parent is not None and position.parent.previous_move is not None:
             if (position.parent.previous_move & 0x1FF) == PASS_MOVE:
                 black_score, white_score = final_score(position)
-                # Return from Black's perspective (positive = Black wins)
                 return (black_score - white_score), PASS_MOVE
 
     # 2. Leaf node: depth exhausted -> heuristic evaluation
     if depth == 0:
         return static_eval(position), PASS_MOVE
 
-    # 3. Generate legal moves, then append pass as a last-resort option
+    # 3. Transposition table lookup
+    board_hash = hash(position.bitboard.black.tobytes() + position.bitboard.white.tobytes())
+    tt_key = (board_hash, position.black_to_play, depth)
+    if tt_key in _transposition_table:
+        return _transposition_table[tt_key]
+
+    # 4. Generate legal moves, apply beam search, then append pass at end
     candidate_moves = move_gen(position)
+    beam = get_beam_width(depth, max_depth)
+    candidate_moves = filter_moves_by_tier(candidate_moves, beam)
     candidate_moves.append(PASS_MOVE)
 
     best_move = PASS_MOVE
 
-    # 4. Maximizing player (Black)
+    # 5. Maximizing player (Black)
     if position.black_to_play:
         max_eval = -float('inf')
 
         for move in candidate_moves:
             next_pos = make_a_move(position, move)
-            eval_score, _ = alpha_beta(next_pos, depth - 1, alpha, beta)
+            eval_score, _ = alpha_beta(next_pos, depth - 1, alpha, beta, max_depth)
 
             if eval_score > max_eval:
                 max_eval = eval_score
@@ -218,15 +274,16 @@ def alpha_beta(position: Position, depth: int, alpha: float, beta: float) -> tup
             if beta <= alpha:
                 break  # beta cutoff
 
+        _tt_store(tt_key, (max_eval, best_move))
         return max_eval, best_move
 
-    # 5. Minimizing player (White)
+    # 6. Minimizing player (White)
     else:
         min_eval = float('inf')
 
         for move in candidate_moves:
             next_pos = make_a_move(position, move)
-            eval_score, _ = alpha_beta(next_pos, depth - 1, alpha, beta)
+            eval_score, _ = alpha_beta(next_pos, depth - 1, alpha, beta, max_depth)
 
             if eval_score < min_eval:
                 min_eval = eval_score
@@ -236,11 +293,12 @@ def alpha_beta(position: Position, depth: int, alpha: float, beta: float) -> tup
             if beta <= alpha:
                 break  # alpha cutoff
 
+        _tt_store(tt_key, (min_eval, best_move))
         return min_eval, best_move
 
 
 # ---------------------------------------------------------------------------
-# 4. Public entry point
+# 6. Public entry point
 # ---------------------------------------------------------------------------
 
 def get_best_move(position: Position, search_depth: int = 3) -> np.uint16:
@@ -248,5 +306,10 @@ def get_best_move(position: Position, search_depth: int = 3) -> np.uint16:
     Entry point for the engine to find the best move.
     Initializes Alpha-Beta bounds.
     """
-    best_score, best_move = alpha_beta(position, search_depth, -float('inf'), float('inf'))
+    _transposition_table.clear()   # fresh table per top-level search
+    best_score, best_move = alpha_beta(
+        position, search_depth, -float('inf'), float('inf'),
+        max_depth=search_depth
+    )
     return best_move
+

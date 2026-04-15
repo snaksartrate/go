@@ -5,6 +5,7 @@ from utility_functions import adjacent
 from environment import Position, BitBoard
 
 board_size = C.board_size
+total_squares = board_size * board_size
 
 def pseudo_legal(board : BitBoard) -> list[np.uint16]:
     pseudo_legal = []
@@ -207,27 +208,86 @@ def make_a_move(position : Position, move : np.uint16) -> Position:
         
     return Position(new_board, black_to_play_next, position, move, bp, wp)
 
+# ---------------------------------------------------------------------------
+# Helper: count total stones on the board
+# ---------------------------------------------------------------------------
+def count_stones(board: BitBoard) -> int:
+    count = 0
+    for i in range(total_squares):
+        if board.get(i) != 0:
+            count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Helper: active zone — indices within max_distance of any existing stone
+# ---------------------------------------------------------------------------
+def get_active_zone(board: BitBoard, max_distance: int = 2) -> set:
+    active = set()
+    for i in range(total_squares):
+        if board.get(i) != 0:
+            active.add(i)
+            for a in adjacent(i):
+                active.add(a)
+                if max_distance >= 2:
+                    for b in adjacent(a):
+                        active.add(b)
+    return active
+
+
+# ---------------------------------------------------------------------------
+# Helper: optimised Ko check — avoids full make_a_move unless single capture
+# ---------------------------------------------------------------------------
+def is_simple_ko(position: Position, move_idx: int) -> bool:
+    if not position.parent:
+        return False
+    board = position.bitboard
+    opp_stone = 1 if position.black_to_play else 2
+
+    capture_count = 0
+    for a in adjacent(move_idx):
+        if board.get(a) == opp_stone:
+            stones, libs = get_group_stats(board, a)
+            if len(libs) == 1 and move_idx in libs:
+                capture_count += len(stones)
+
+    if capture_count == 1:
+        # Only single-stone captures can be simple ko — verify fully
+        return make_a_move(position, np.uint16(move_idx)).bitboard == position.parent.bitboard
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Move generation (with distance filtering + optimised Ko)
+# ---------------------------------------------------------------------------
 def move_gen(position: Position):
     # 1. Get pseudo-legal
     moves = pseudo_legal(position.bitboard)
-    
-    # 2. Filter Suicides (using your existing efficient is_suicide)
+
+    # 2. Distance filtering (skip in opening — first ~10 stones)
+    stone_count = count_stones(position.bitboard)
+    if stone_count >= 10:
+        active_zone = get_active_zone(position.bitboard, max_distance=2)
+        moves = [m for m in moves if int(m) in active_zone]
+
+    # 3. Filter Suicides
     moves = [m for m in moves if not is_suicide(position.bitboard, m, position.black_to_play)]
-    
-    # 3. Assign Priority and Analyze (The fast way)
+
+    # 4. Assign Priority and Analyze
     prioritized_moves = []
     for m in moves:
         prioritized_moves.append(analyze_move_attributes(position, int(m)))
-    
-    # 4. Filter Ko (Only for moves that have the Capture bit set)
+
+    # 5. Filter Ko (optimised — only full check on single-stone captures)
     if position.parent:
         final_moves = []
         for m in prioritized_moves:
-            if m & 0x8000: # Bit 15 set (Capture)
-                if make_a_move(position, m).bitboard == position.parent.bitboard:
+            if m & 0x8000:  # Bit 15 set (Capture)
+                move_idx = int(m & 0x1FF)
+                if is_simple_ko(position, move_idx):
                     continue
             final_moves.append(m)
         prioritized_moves = final_moves
 
-    # 5. Sort Descending (Best moves first)
+    # 6. Sort Descending (Best moves first)
     return sorted(prioritized_moves, reverse=True)
