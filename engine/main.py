@@ -2,58 +2,65 @@ import sys
 import numpy as np
 
 import constants as C
-from environment import Position, BitBoard
-from moves import make_a_move, move_gen
+from board import Board
+from environment import Position
+from moves import move_gen
 from eval import get_best_move, static_eval
 
 board_size = C.board_size
-PASS_MOVE = np.uint16(board_size * board_size)
-
 
 # ─── Display Helpers ────────────────────────────────────────────────
 
 def display_board(position: Position):
     """Pretty-print the board state to the console."""
-    board = position.bitboard
-    symbols = {0: '.', 1: 'W', 2: 'B'}
+    board = position.board
+    symbols = {Board.EMPTY: '.', Board.WHITE: 'W', Board.BLACK: 'B'}
     
     # Column headers
-    col_labels = C.for_display_coords_x[:board_size]
-    print(f"\n    {' '.join(col_labels)}")
-    print(f"   +{'--' * board_size}+")
+    col_labels = [''] + C.for_display_coords_x[:board_size]
+    print(f"\n   {'  '.join(col_labels)}")
+    print(f"   +{'---' * board_size}+")
     
     for r in range(board_size):
+        # r=0 is the top row, label should be '9'
         row_label = C.for_display_coords_y[r].rjust(2)
         row_chars = []
         for c in range(board_size):
-            idx = r * board_size + c
-            val = board.get(idx)
-            row_chars.append(symbols[val])
-        print(f"{row_label} | {' '.join(row_chars)} |")
+            loc = board.loc(c, r)
+            val = board.board[loc]
+            row_chars.append(symbols.get(val, '?'))
+        print(f"{row_label} | {'  '.join(row_chars)} |")
     
-    print(f"   +{'--' * board_size}+")
+    print(f"   +{'---' * board_size}+")
     
     # Status line
     turn = "Black" if position.black_to_play else "White"
-    print(f"   Turn: {turn}  |  Black captures: {position.black_prisoners}  |  White captures: {position.white_prisoners}")
+    # Note: black_prisoners in new engine = stones Black captured FROM White
+    print(f"   Turn: {turn}  |  Black caps: {position.black_prisoners}  |  White caps: {position.white_prisoners}")
     print(f"   Eval: {static_eval(position):+.2f} (positive = Black ahead)")
 
 
-def format_move(move: np.uint16) -> str:
-    """Convert an engine move (uint16) to human-readable notation like 'E5'."""
-    idx = int(move & 0x1FF)
-    if idx == board_size * board_size:
+def format_move(move: int) -> str:
+    """Convert an engine loc to human-readable notation like 'E5'."""
+    if move == Board.PASS_LOC:
         return "PASS"
-    row = idx // board_size
-    col = idx % board_size
-    return f"{C.for_display_coords_x[col]}{C.for_display_coords_y[row]}"
+    
+    # We use a dummy board to get the mapping
+    temp_board = Board(board_size)
+    x = temp_board.loc_x(move)
+    y = temp_board.loc_y(move)
+    
+    if x < 0 or x >= board_size or y < 0 or y >= board_size:
+        return f"ERR({move})"
+        
+    return f"{C.for_display_coords_x[x]}{C.for_display_coords_y[y]}"
 
 
-def parse_move(text: str) -> np.uint16 | None:
-    """Parse human input like 'E5' or 'pass' into a uint16 move index."""
+def parse_move(text: str) -> int | None:
+    """Parse human input like 'E5' or 'pass' into a KataGo loc."""
     text = text.strip().upper()
     if text == "PASS":
-        return PASS_MOVE
+        return Board.PASS_LOC
     if len(text) < 2:
         return None
     
@@ -68,35 +75,31 @@ def parse_move(text: str) -> np.uint16 | None:
         return None
     row = C.for_display_coords_y.index(row_str)
     
-    idx = row * board_size + col
-    return np.uint16(idx)
+    temp_board = Board(board_size)
+    return temp_board.loc(col, row)
 
 
 # ─── Core Engine Interface ──────────────────────────────────────────
 
-def engine_move(position: Position, depth: int = 3) -> Position:
+def engine_move(position: Position, depth: int = 5) -> None:
     """
-    Given a position, compute the best move and return the resulting position.
-    This is the function the GUI will call.
+    Given a position, compute the best move and push it.
     """
     best_move = get_best_move(position, search_depth=depth)
     print(f"   Engine plays: {format_move(best_move)}")
-    return make_a_move(position, best_move)
+    position.push(best_move)
 
 
 # ─── Game Modes ─────────────────────────────────────────────────────
-# --- Game Modes -----------------------------------------------------
 
-def self_play(depth: int = 3, max_moves: int = 200):
+def self_play(depth: int = 5, max_moves: int = 200):
     """
     Engine plays against itself. 
-    Useful for testing and watching the engine's behaviour.
     """
     print(f"\n=== Self-Play Mode (depth={depth}, board={board_size}x{board_size}) ===")
     
-    position = Position(BitBoard(), True, None, move=None)
+    position = Position()
     move_number = 0
-    consecutive_passes = 0
     
     display_board(position)
     
@@ -105,37 +108,32 @@ def self_play(depth: int = 3, max_moves: int = 200):
         turn = "Black" if position.black_to_play else "White"
         print(f"\n-- Move {move_number} ({turn}) --")
         
-        position = engine_move(position, depth)
+        engine_move(position, depth)
         display_board(position)
         
-        # Check for game end (two consecutive passes)
-        last_move_idx = int(position.previous_move & 0x1FF) if position.previous_move is not None else -1
-        if last_move_idx == board_size * board_size:
-            consecutive_passes += 1
-            if consecutive_passes >= 2:
-                print("\n══════════════════════════════")
-                print("  GAME OVER — Both players passed.")
-                final_score = static_eval(position)
-                if final_score > 0:
-                    print(f"  Result: Black wins by {final_score:.1f}")
-                elif final_score < 0:
-                    print(f"  Result: White wins by {-final_score:.1f}")
-                else:
-                    print("  Result: Draw")
-                print("══════════════════════════════")
-                return position
-        else:
-            consecutive_passes = 0
-    
+        # Check for game end
+        if position.pass_count >= 2:
+            print("\n══════════════════════════════")
+            print("  GAME OVER — Both players passed.")
+            from eval import final_score
+            b_score, w_score = final_score(position)
+            print(f"  Final Score: Black {b_score:.1f}, White {w_score:.1f}")
+            if b_score > w_score:
+                print(f"  Result: Black wins by {b_score - w_score:.1f}")
+            elif w_score > b_score:
+                print(f"  Result: White wins by {w_score - b_score:.1f}")
+            else:
+                print("  Result: Draw")
+            print("══════════════════════════════")
+            return position
+            
     print(f"\n  Game stopped after {max_moves} moves.")
     return position
 
 
-def human_vs_engine(human_is_black: bool = True, depth: int = 3):
+def human_vs_engine(human_is_black: bool = True, depth: int = 5):
     """
     Interactive mode: human plays one colour, engine plays the other.
-    Enter moves as coordinates like 'E5', or type 'pass'.
-    Type 'quit' or 'exit' to stop.
     """
     human_colour = "Black" if human_is_black else "White"
     engine_colour = "White" if human_is_black else "Black"
@@ -143,19 +141,23 @@ def human_vs_engine(human_is_black: bool = True, depth: int = 3):
     print(f"    Board: {board_size}x{board_size} | Komi: {C.komi}")
     print(f"    Enter moves as coordinates (e.g. E5), 'pass', 'undo', or 'quit'.\n")
     
-    position = Position(BitBoard(), True, None, move=None)
+    position = Position()
     move_number = 0
-    consecutive_passes = 0
     
+    if not human_is_black:
+        # Engine starts if human is White
+        move_number += 1
+        print(f"\n── Move {move_number} (Black — Engine thinking...) ──")
+        engine_move(position, depth)
+        
     display_board(position)
     
     while True:
         is_human_turn = (position.black_to_play == human_is_black)
         turn = "Black" if position.black_to_play else "White"
-        move_number += 1
         
         if is_human_turn:
-            # Human's turn
+            move_number += 1
             while True:
                 try:
                     user_input = input(f"\n  [{turn}] Your move: ").strip()
@@ -168,11 +170,10 @@ def human_vs_engine(human_is_black: bool = True, depth: int = 3):
                     return position
                 
                 if user_input.lower() == 'undo':
-                    # Undo both the engine's last move and the player's last move
-                    if position.parent and position.parent.parent:
-                        position = position.parent.parent
+                    if len(position.move_history) >= 2:
+                        position.pop() # engine's move
+                        position.pop() # player's move
                         move_number -= 2
-                        consecutive_passes = 0
                         print("  Undid last two moves.")
                         display_board(position)
                     else:
@@ -184,56 +185,47 @@ def human_vs_engine(human_is_black: bool = True, depth: int = 3):
                     print(f"  Invalid input. Use format like 'E5' or 'pass'.")
                     continue
                 
-                # Validate move is legal
-                move_idx = int(move & 0x1FF)
-                if move_idx != board_size * board_size:
-                    legal_moves = move_gen(position)
-                    legal_indices = [int(m & 0x1FF) for m in legal_moves]
-                    if move_idx not in legal_indices:
-                        print(f"  Illegal move. Try again.")
-                        continue
+                # Legality check
+                if not position.board.would_be_legal(position.current_player, move):
+                    print(f"  Illegal move. Try again.")
+                    continue
                 
-                position = make_a_move(position, move)
+                position.push(move)
                 print(f"   You play: {format_move(move)}")
                 display_board(position)
                 break
         else:
             # Engine's turn
+            move_number += 1
             print(f"\n── Move {move_number} ({turn} — Engine thinking...) ──")
-            position = engine_move(position, depth)
+            engine_move(position, depth)
             display_board(position)
         
         # Check for game end
-        last_move_idx = int(position.previous_move & 0x1FF) if position.previous_move is not None else -1
-        if last_move_idx == board_size * board_size:
-            consecutive_passes += 1
-            if consecutive_passes >= 2:
-                print("\n══════════════════════════════")
-                print("  GAME OVER — Both players passed.")
-                final_score = static_eval(position)
-                if final_score > 0:
-                    print(f"  Result: Black wins by {final_score:.1f}")
-                elif final_score < 0:
-                    print(f"  Result: White wins by {-final_score:.1f}")
-                else:
-                    print("  Result: Draw")
-                print("══════════════════════════════")
-                return position
-        else:
-            consecutive_passes = 0
+        if position.pass_count >= 2:
+            print("\n══════════════════════════════")
+            print("  GAME OVER — Both players passed.")
+            from eval import final_score
+            b_score, w_score = final_score(position)
+            print(f"  Final Score: Black {b_score:.1f}, White {w_score:.1f}")
+            if b_score > w_score:
+                print(f"  Result: Black wins by {b_score - w_score:.1f}")
+            elif w_score > b_score:
+                print(f"  Result: White wins by {w_score - b_score:.1f}")
+            else:
+                print("  Result: Draw")
+            print("══════════════════════════════")
+            return position
 
-
-# ─── Entry Point ────────────────────────────────────────────────────
 
 def main():
     print(f"\n  +==================================+")
-    print(f"  |        Go Engine v0.1            |")
+    print(f"  |        Go Engine v0.2            |")
     print(f"  |   {board_size}x{board_size} board  |  komi {C.komi}      |")
     print(f"  +==================================+\n")
     
-    # Parse command-line arguments for mode selection
     mode = "menu"
-    depth = 3
+    depth = 5
     
     for arg in sys.argv[1:]:
         if arg.startswith("--depth="):
@@ -252,7 +244,6 @@ def main():
     elif mode == "play-white":
         human_vs_engine(human_is_black=False, depth=depth)
     else:
-        # Interactive menu
         print("  Select mode:")
         print("    1) Self-play (engine vs engine)")
         print("    2) Play as Black (vs engine)")
