@@ -1,4 +1,5 @@
 engine/__pycache__/
+engine/actual_katago_files
 engine/errors/
 material/
 notes/
