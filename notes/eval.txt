@@ -9,7 +9,7 @@ note ->  we have not included pass as a valid move in movegen function.
 for a node:
 - if depth == 0 or previous two moves were pass: # we can also use a counter for number of consecutive passes or just do position.bitboard == position.parent.bitboard == position.parent.parent.bitboard
     - if previous two moves were pass:
-        - return score (not static evaluation) of who won (either as a tuple of length two or just two values) # think about it, do what you think is better, either way alpha beta pruning will find the best move
+        - return the final score as described in score_calculation.txt (either as a tuple of length two or just two values) # think about it, do what you think is better, either way alpha beta pruning will find the best move
     - evaluate the position using static evaluation function
     - return the evaluation
 - else:

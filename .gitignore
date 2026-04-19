@@ -1,1 +1,7 @@
+engine/__pycache__/
+engine/errors/
 material/
+notes/
+code.txt
+temp.py
+.gitignore

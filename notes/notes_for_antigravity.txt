@@ -1,48 +1,259 @@
-this is an engine for go / weiqi / baduk
-the input will be a position as defined in environment.py
-the output will also be a position that will be evaluated as the best move
-
-constants.py stores system wide constants, can be tweaked manually inside the file if we want to run the game with different settings
-
-environment.py stores the environment, like position and board
-
-moves.py generates all legal moves and sorts them in theoretical order of importance, descending
-
-utility_functions.py stores functions that we may require multiple times and are completely independent of any class
-
-eval.py stores the game tree generation and alpha beta pruning and static evaluation, etc
-
-main.py stores the main function, which is the entry point of the program // again, a thing to be done after this like the gui
-
-now, the workflow is like this
-- receive a position
-- generate all legal moves
-- for each move, generate the resulting position
-- proceed to create a game tree recursively up to a certain depth
-- use alpha beta pruning algorithm to evaluate each resulting position
-- return the move that leads to the best position
-then this move will be applied to a position and the position will be returned
-
-now, there will be a gui, upon which we will work later
-the gui calls the engine with current position, and the returned position is then displayed
-the directories material and notes are used for reference
+congratulations antigravity, you made this engine work
+now there is some polishing we need to do 
+the engine is pretty slow
+let us implement these changes
 
 
 
 
-progress as of now
-- i have written moves.py and eval.py completely
-- perform a deep reasoning on their validity
-- if they are valid, proceed to write main.py
-- if not, correct them and then proceed to write main.py
-- engine/main.py or engine/__main__.py is going to be called for computation only
 
-further idea
-- so the user runs the main.py or __main__.py in the root directory go/
-- then it calls a board from go/gui/
-- now the gui is not a full fledged game application, it is just a board where a move is made and the computer then makes a move
-- it can store upto 5 of the previous games (just make some json named history.json and store 5 positions in that file along with details if you like)
-- so the board lets us place stones on intersections and performs captures, no animations required, just spawn and despawn pieces
-- maintain a track of number of captures and points per side
 
-now i want you to write engine/main.py or engine/__main__.py
+
+
+
+
+## 🔴 **CRITICAL FIXES** (Implement First - Massive Impact)
+
+### 1. **Fix BitBoard.copy() - 10-20x speedup**
+**Current problem:** Loops through all 81 squares
+```python
+# BROKEN - O(81) per copy
+def copy(self):
+    new_board = BitBoard()
+    for i in range(board_size * board_size):
+        if self.get(i):
+            new_board.set(i, self.get(i) - 1)
+    return new_board
+```
+
+**Fix:** Just copy the numpy arrays if they do not refer to the same objects and addresses in memory. we do not want any bugs because we modified the same board which we were playing on.
+```python
+# FAST - O(1) array copy
+def copy(self):
+    new_board = BitBoard()
+    new_board.black = self.black.copy()
+    new_board.white = self.white.copy()
+    return new_board
+```
+
+**Impact:** This alone could give you 10-20x speedup since every `make_a_move()` calls `copy()`.
+
+---
+
+## 🟠 **HIGH PRIORITY** (Big wins with minimal accuracy loss)
+
+### 2. **Distance-from-action filtering - 3-5x speedup**
+Add this to `move_gen()` BEFORE analyzing attributes:
+
+```python
+def get_active_zone(board, max_distance=2):
+    """Return set of indices near existing stones"""
+    active = set()
+    for i in range(board_size * board_size):
+        if board.get(i) != 0:
+            # Add stone and neighbors
+            active.add(i)
+            for a in adjacent(i):
+                active.add(a)
+            # Optional: add second ring
+            if max_distance >= 2:
+                for a in adjacent(i):
+                    for b in adjacent(a):
+                        active.add(b)
+    return active
+```
+
+Then in `move_gen()`:
+```python
+# After pseudo_legal, before suicide check
+if position.parent is not None:  # Don't filter on first move
+    active_zone = get_active_zone(position.bitboard)
+    moves = [m for m in moves if int(m) in active_zone]
+```
+
+**Accuracy consideration:** First 5-10 moves should consider whole board (corners/sides important in opening).
+
+### 3. **Beam search with tiered pruning - 5-10x speedup**
+Add to `alpha_beta()` after `move_gen()`:
+
+```python
+def filter_moves_by_tier(moves, beam_width=15):
+    """Keep critical moves, limit others"""
+    tier1 = []  # Captures, saves, ataris
+    tier2 = []  # Cuts, connects
+    tier3 = []  # Others
+    
+    for m in moves:
+        if m & 0xE000:  # capture | atari | save (bits 15, 14, 13)
+            tier1.append(m)
+        elif m & 0x1800:  # cut | connect (bits 12, 11)
+            tier2.append(m)
+        else:
+            tier3.append(m)
+    
+    # Always keep all tier1 (tactical), limit tier2+3
+    result = tier1 + tier2 + tier3
+    return result[:beam_width]
+```
+
+In `alpha_beta()`:
+```python
+candidate_moves = move_gen(position)
+candidate_moves = filter_moves_by_tier(candidate_moves, beam_width=15)  # Tune this
+candidate_moves.append(PASS_MOVE)
+```
+
+**Tuning guidance:**
+- `beam_width=10`: Very fast, might miss some moves
+- `beam_width=15`: Good balance
+- `beam_width=20`: Slower but safer
+
+### 4. **Progressive beam widening**
+```python
+def get_beam_width(depth, max_depth):
+    """Wider search near root, narrower at leaves"""
+    if depth >= max_depth - 1:  # Near root
+        return 20
+    elif depth >= 2:
+        return 12
+    else:
+        return 8
+```
+
+---
+
+## 🟡 **MEDIUM PRIORITY** (Refinements)
+
+### 5. **Optimize Ko check**
+Current code calls `make_a_move()` unnecessarily:
+```python
+# SLOW - in move_gen
+if make_a_move(position, m).bitboard == position.parent.bitboard:
+```
+
+Better approach - check if move would create simple ko pattern:
+```python
+def is_simple_ko(position, move_idx):
+    """Check if this is a simple ko recapture without making the move"""
+    if not position.parent:
+        return False
+    
+    board = position.bitboard
+    stone = 2 if position.black_to_play else 1
+    opp_stone = 3 - stone
+    
+    # Ko only happens when:
+    # 1. We capture exactly 1 stone
+    # 2. We're left with 1 liberty
+    # 3. Parent board would be recreated
+    
+    capture_count = 0
+    for a in adjacent(move_idx):
+        if board.get(a) == opp_stone:
+            stones, libs = get_group_stats(board, a)
+            if len(libs) == 1 and move_idx in libs:
+                capture_count += len(stones)
+    
+    if capture_count == 1:
+        # Check if we'd have 1 liberty (simple ko shape)
+        # Only then worth full check
+        return make_a_move(position, move_idx).bitboard == position.parent.bitboard
+    
+    return False
+```
+
+### 6. **Transposition table** (Optional but powerful)
+```python
+transposition_table = {}  # Global cache
+
+def alpha_beta(position, depth, alpha, beta):
+    # Create position hash
+    board_hash = hash(position.bitboard.black.tobytes() + position.bitboard.white.tobytes())
+    
+    key = (board_hash, position.black_to_play, depth)
+    if key in transposition_table:
+        return transposition_table[key]
+    
+    # ... rest of search ...
+    
+    transposition_table[key] = (best_eval, best_move)
+    return best_eval, best_move
+```
+
+**Warning:** Needs cache size limit to avoid memory issues.
+
+---
+
+## 🟢 **NICE TO HAVE** (Lower priority)
+
+### 7. **Early game special handling**
+```python
+def count_stones(board):
+    count = 0
+    for i in range(board_size * board_size):
+        if board.get(i) != 0:
+            count += 1
+    return count
+
+# In move_gen, before distance filtering:
+if count_stones(position.bitboard) < 10:
+    # Don't filter by distance in opening
+    skip_distance_filter = True
+```
+
+### 8. **Quiescence search** (Prevents horizon effect)
+```python
+def alpha_beta(position, depth, alpha, beta):
+    if depth == 0:
+        # Check for forcing sequences
+        moves = move_gen(position)
+        has_tactical = any(m & 0xE000 for m in moves)  # Capture/atari/save
+        
+        if has_tactical:
+            # Search tactical moves 1 ply deeper
+            return alpha_beta(position, 1, alpha, beta)
+        
+        return static_eval(position), PASS_MOVE
+```
+
+---
+
+## ❌ **AVOID / REVISE**
+
+### Killer move heuristic
+The suggested changes mention this, but it adds complexity for marginal benefit. **Skip for now** - beam search + move ordering already handle this.
+
+---
+
+## 📊 **Expected Performance Impact**
+
+| Optimization | Speed Gain | Accuracy Impact |
+|-------------|-----------|-----------------|
+| Fix BitBoard.copy() | 10-20x | None ✅ |
+| Distance filtering | 3-5x | Minimal (test with distance=2) |
+| Beam search (width=15) | 5-10x | Small (keeps tactical moves) |
+| Tier-based filtering | 2-3x | Very small |
+| Ko optimization | 1.2-1.5x | None |
+| **Combined** | **50-100x** | **~5-10% accuracy loss** |
+
+---
+
+## 🎯 **Implementation Order**
+
+1. **Fix BitBoard.copy()** - Do this FIRST (2 lines of code, massive impact)
+2. **Add beam search** - Simple, big win
+3. **Distance filtering** - Test with `max_distance=2` first
+4. **Tier-based filtering** - Refine beam search
+5. **Progressive widening** - Fine-tuning
+6. Test and benchmark at each step!
+
+---
+
+## ⚠️ **Accuracy Preservation Tips**
+
+1. **Always keep tactical moves** (tier 1) - never prune captures/saves/ataris
+2. **Test beam width** - Start at 20, gradually reduce while checking play quality
+3. **Opening handling** - Don't filter by distance in first 10 moves
+4. **Add safety margins** - If only 8 moves after filtering, don't filter further
+
+Want me to implement these changes for you, or would you like to do it step by step with testing?

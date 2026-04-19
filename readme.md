@@ -1,3 +1,5 @@
+this readme is outdated
+
 position has data members board, turn, score, parent
 children are created on the fly
 
