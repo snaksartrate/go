@@ -9,6 +9,26 @@ from board import Board
 from constants import board_size
 
 
+def _count_atari_groups(board: Board) -> dict:
+    """Count groups in atari (exactly 1 liberty) for each player.
+    
+    Returns dict[Board.BLACK] = count, dict[Board.WHITE] = count.
+    """
+    counts = {Board.BLACK: 0, Board.WHITE: 0}
+    seen = set()
+    for y in range(board.y_size):
+        for x in range(board.x_size):
+            loc = board.loc(x, y)
+            val = board.board[loc]
+            if val == Board.BLACK or val == Board.WHITE:
+                head = board.group_head[loc]
+                if head not in seen:
+                    seen.add(head)
+                    if board.group_liberty_count[head] == 1:
+                        counts[val] += 1
+    return counts
+
+
 class Position:
     """Thin mutable wrapper around a KataGo Board.
 
@@ -26,6 +46,7 @@ class Position:
         'white_prisoners',
         'move_history',
         'pass_count',
+        'atari_count',  # Track how many groups are in atari for each player
     )
 
     def __init__(self, board: Board = None, black_to_play: bool = True):
@@ -35,6 +56,7 @@ class Position:
         self.white_prisoners = 0  # stones White has captured
         self.move_history = []    # stack of (loc, record_or_None, saved_state)
         self.pass_count = 0       # consecutive passes (for game-end detection)
+        self.atari_count = {Board.BLACK: 0, Board.WHITE: 0}  # groups in atari
 
     @property
     def current_player(self) -> int:
@@ -53,16 +75,22 @@ class Position:
             loc: Board location (use Board.PASS_LOC for pass,
                  or board.loc(x, y) for a board intersection).
 
-        Updates black_to_play, prisoners, and pass_count.
+        Updates black_to_play, prisoners, pass_count, and atari_count.
         """
         pla = self.current_player
 
-        # Save state that needs to be restored on pop
+        # Save state that needs to be restored on pop.
+        # simple_ko_point MUST be saved here: board.playUnsafe(PASS) sets it
+        # to None, and pass moves have no undo record to restore it from.
+        # Without this, every undone pass silently destroys the ko restriction,
+        # allowing illegal ko recaptures and creating search cycles 100+ deep.
         saved = (
             self.black_to_play,
             self.black_prisoners,
             self.white_prisoners,
             self.pass_count,
+            self.board.simple_ko_point,   # ← ko fix
+            self.atari_count.copy(),       # ← atari count fix
         )
 
         if loc == Board.PASS_LOC:
@@ -82,6 +110,9 @@ class Position:
             self.black_prisoners = self.board.num_captures_made[Board.BLACK]
             self.white_prisoners = self.board.num_captures_made[Board.WHITE]
 
+        # Recount atari groups (only affected groups change, but O(groups) is fast enough)
+        self.atari_count = _count_atari_groups(self.board)
+
         self.black_to_play = not self.black_to_play
         self.move_history.append((loc, record, saved))
 
@@ -98,24 +129,22 @@ class Position:
             self.black_prisoners,
             self.white_prisoners,
             self.pass_count,
+            saved_ko_point,              # ← restored here (ko bug fix)
+            saved_atari_count,           # ← restored here (atari count fix)
         ) = saved
 
         if record is not None:
-            # Non-pass move: undo the board mutation
+            # Non-pass move: board.undo() restores simple_ko_point from record.
             self.board.undo(record)
         else:
-            # Pass: undo the pass (just restores pla and simple_ko_point)
-            # board.playUnsafe for PASS_LOC only changes pla and clears ko,
-            # so we restore those from the saved state.
-            # The pla is already restored by saved black_to_play above.
-            # We need to restore the board's pla field:
+            # Pass undo: board.playUnsafe(PASS) only changed pla and cleared
+            # simple_ko_point.  board.undo() is not available for passes, so
+            # we restore both fields manually from the saved snapshot.
             self.board.pla = self.current_player
-            # simple_ko_point was cleared by the pass — it's already been
-            # restored by the undo of whatever came after, or this is the
-            # most recent move. In either case, the ko point before the pass
-            # cannot be recovered from board state alone, but since we always
-            # pop in reverse order and non-pass undos restore ko via their
-            # record, this is safe.
+            self.board.simple_ko_point = saved_ko_point  # ← key fix
+
+        # Restore atari count
+        self.atari_count = saved_atari_count
 
         return loc
 
@@ -134,4 +163,5 @@ class Position:
         new_pos.white_prisoners = self.white_prisoners
         new_pos.move_history = []  # fresh history for the copy
         new_pos.pass_count = self.pass_count
+        new_pos.atari_count = self.atari_count.copy()
         return new_pos
