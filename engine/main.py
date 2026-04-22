@@ -36,7 +36,7 @@ def display_board(position: Position):
     # Status line
     turn = "Black" if position.black_to_play else "White"
     # Note: black_prisoners in new engine = stones Black captured FROM White
-    print(f"   Turn: {turn}  |  Black caps: {position.black_prisoners}  |  White caps: {position.white_prisoners}")
+    print(f"   Turn: {turn}  |  Black dead: {position.black_prisoners}  |  White dead: {position.white_prisoners}")
     print(f"   Eval: {static_eval(position):+.2f} (positive = Black ahead)")
 
 
@@ -185,9 +185,14 @@ def human_vs_engine(human_is_black: bool = True, depth: int = 5):
                     print(f"  Invalid input. Use format like 'E5' or 'pass'.")
                     continue
                 
-                # Legality check
+                # Legality check (simple rules: occupied, suicide, simple ko)
                 if not position.board.would_be_legal(position.current_player, move):
                     print(f"  Illegal move. Try again.")
+                    continue
+                
+                # Superko check (positional: no repeated board positions)
+                if position.would_violate_superko(move):
+                    print(f"  Illegal move (superko). Try again.")
                     continue
                 
                 position.push(move)

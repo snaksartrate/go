@@ -8,7 +8,7 @@ Pos = int
 Loc = int
 Player = int
 
-#Implements legal moves without superko
+#Implements legal moves without superko (superko is handled by Position in environment.py)
 class Board:
     EMPTY = 0
     BLACK = 1

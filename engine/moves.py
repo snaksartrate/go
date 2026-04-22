@@ -97,11 +97,12 @@ def fast_score_move(board: Board, pla: int, loc: int) -> int:
     return score
 
 
-def move_gen(position: Position, killers: list | None = None) -> list[int]:
+def move_gen(position: Position, killers: list | None = None, 
+             history: dict | None = None) -> list[int]:
     """Generate and score all legal moves for the current player.
 
-    Returns a list of (score, loc) tuples sorted by score descending.
-    Killer moves are included and scored with a bonus if legal.
+    Returns a list of locs sorted by score descending.
+    Incorporates killer move bonuses and history heuristic if provided.
 
     KataGo's Board does NOT maintain an empty-squares set, so we scan
     all board locations. On 9x9 (81 squares) this is trivial.
@@ -143,6 +144,12 @@ def move_gen(position: Position, killers: list | None = None) -> list[int]:
                 continue
 
             sc = fast_score_move(board, pla, loc)
+            
+            # Add history bonus if available
+            if history is not None and loc < len(history[pla]):
+                hist_bonus = history[pla][loc]
+                sc += hist_bonus
+            
             scored_moves.append((sc, loc))
 
     # Sort descending by score

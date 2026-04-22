@@ -2,17 +2,18 @@
 #
 # Negamax alpha-beta with:
 #   - Undo-based play (zero board copies during search)
+#   - Transposition table (TT) for avoiding redundant searches
+#   - Principal Variation Search (PVS) for zero-width window efficiency
 #   - Killer moves (2 per depth)
 #   - History heuristic (depth² bonus on cutoff)
 #   - Null move pruning (with safety: skip if pass_count>0, depth≤2, or in atari)
-#   - Iterative deepening with aspiration windows
+#   - Late Move Reductions (LMR) for non-promising moves
+#   - Iterative deepening with widening aspiration windows
+#   - Positional superko enforcement (repeated board positions are skipped)
 #
-# Static evaluation has 5 components:
-#   1. Territory (flood-fill, require ≥2 liberties on all adjacent groups)
-#   2. Eye-space scoring (is_simple_eye per group, 2+ eyes = alive)
-#   3. Influence map (1/(1+manhattan_dist) within distance 3)
-#   4. Capture threats (atari/low-liberty penalties)
-#   5. Prisoners and komi
+# Static evaluation:
+#   - static_eval_cheap(): O(groups) eval for leaf nodes
+#   - static_eval(): full 5-component eval for display/post-game
 #
 # Color convention: Board.BLACK = 1, Board.WHITE = 2.
 
@@ -21,6 +22,8 @@ from constants import board_size, komi
 from environment import Position
 from moves import move_gen
 from tables import manhattan
+from tt import tt_probe, tt_store, tt_clear, TT_EXACT, TT_LOWER, TT_UPPER
+import math
 
 _TOTAL = board_size * board_size
 _INF = float('inf')
@@ -249,32 +252,103 @@ def _eval_for_current_player(position: Position) -> float:
     return raw if position.black_to_play else -raw
 
 
+def static_eval_cheap(position: Position) -> float:
+    """Fast O(groups) evaluation for leaf nodes during search.
+    
+    Uses only group-based metrics (liberty counts, stone counts).
+    No flood-fill, no influence map — suitable for being called at
+    every leaf node.
+    
+    Returns score from Black's perspective (positive = Black advantage).
+    """
+    board = position.board
+    score = 0.0
+    
+    # Component 1: Prisoners and komi
+    score += position.black_prisoners
+    score -= position.white_prisoners
+    score -= komi
+    
+    # Component 2: Group scoring based on liberties and stones
+    visited_heads = set()
+    
+    for y in range(board.y_size):
+        for x in range(board.x_size):
+            loc = board.loc(x, y)
+            val = board.board[loc]
+            if val != Board.BLACK and val != Board.WHITE:
+                continue
+            
+            head = board.group_head[loc]
+            if head in visited_heads:
+                continue
+            visited_heads.add(head)
+            
+            sign = 1.0 if val == Board.BLACK else -1.0
+            stone_count = board.group_stone_count[head]
+            lib_count = board.group_liberty_count[head]
+            
+            # Atari penalty
+            if lib_count == 1:
+                score -= sign * 4.0 * stone_count
+            elif lib_count == 2:
+                score -= sign * 0.5 * stone_count
+            else:
+                # Reward liberties and thickness
+                score += sign * (0.1 * lib_count + 0.3) * stone_count
+    
+    return score
+
+
+def _eval_for_current_player_cheap(position: Position) -> float:
+    """Return static_eval_cheap from the current player's perspective."""
+    raw = static_eval_cheap(position)
+    return raw if position.black_to_play else -raw
+
+
 # ═══════════════════════════════════════════════════════════════════════
-# 3. Negamax Alpha-Beta Search
+# 3. Negamax Alpha-Beta Search with TT, PVS, and LMR
 # ═══════════════════════════════════════════════════════════════════════
 
 # Killer move table: killers[depth] = [move1, move2]
 _killers = []
 _MAX_DEPTH = 20
 
+# Futility pruning margins (indexed by depth from leaves)
+FUTILITY_MARGIN = [0, 2.0, 4.0, 6.0]
+
 # History heuristic: history[pla][flat_index]
 # Indexed by player (BLACK=1, WHITE=2) and a flat board index.
 _history = None
 
 
-def _init_search_tables(max_depth: int):
-    """Initialize killer and history tables before a new search."""
-    global _killers, _history
+def _init_killers(max_depth: int):
+    """Initialize killer table before each iterative deepening iteration."""
+    global _killers
     _killers = [[None, None] for _ in range(max_depth + 1)]
+
+
+def _init_history():
+    """Initialize history table once per root search (at start of get_best_move)."""
+    global _history
+    arrsize = (board_size + 1) * (board_size + 2) + 1  # Fixed size formula
     _history = {
-        Board.BLACK: [0] * (board_size + 2) * (board_size + 1) * 2,
-        Board.WHITE: [0] * (board_size + 2) * (board_size + 1) * 2,
+        Board.BLACK: [0] * arrsize,
+        Board.WHITE: [0] * arrsize,
     }
+
+
+def _age_history():
+    """Age history scores between ID iterations (don't zero them)."""
+    for pla in (Board.BLACK, Board.WHITE):
+        h = _history[pla]
+        for i in range(len(h)):
+            h[i] >>= 1  # Right-shift (divide by 2)
 
 
 def _update_killers(depth: int, move: int):
     """Store a killer move at the given depth (2 slots, FIFO)."""
-    if _killers[depth][0] != move:
+    if depth < len(_killers) and _killers[depth][0] != move:
         _killers[depth][1] = _killers[depth][0]
         _killers[depth][0] = move
 
@@ -285,125 +359,280 @@ def _update_history(pla: int, move: int, depth: int):
         _history[pla][move] += depth * depth
 
 
-def _has_group_in_atari(board: Board, pla: int) -> bool:
-    """Check if any group of the given player has exactly 1 liberty."""
-    seen = set()
+def _is_capture_move(board: Board, pla: int, loc: int) -> bool:
+    """Check if this move captures at least one enemy stone (O(4))."""
+    opp = Board.get_opp(pla)
+    for dloc in board.adj:
+        adj = loc + dloc
+        if board.board[adj] == opp and board.group_liberty_count[board.group_head[adj]] == 1:
+            return True
+    return False
+
+
+def _lmr_reduction(depth: int, move_idx: int) -> int:
+    """Compute Late Move Reduction depth reduction.
+    
+    Standard formula: max(0, floor(0.75 + ln(depth) * ln(move_idx) / 2.25))
+    """
+    if depth < 3 or move_idx < 3:
+        return 0
+    r = int(0.75 + math.log(depth) * math.log(move_idx) / 2.25)
+    return max(0, min(r, depth - 1))
+
+
+def quiescence(position: Position, alpha: float, beta: float, qdepth: int = 4) -> float:
+    """Quiescence search: expand only capture moves until position is quiet.
+    
+    Returns score from current player's perspective.
+    Limits recursion depth to qdepth to avoid blowup.
+    """
+    board = position.board
+    pla = position.current_player
+    
+    # Evaluate the current position (stand pat)
+    stand_pat = _eval_for_current_player_cheap(position)
+    if stand_pat >= beta:
+        return beta
+    if stand_pat > alpha:
+        alpha = stand_pat
+    if qdepth <= 0:
+        return alpha
+    
+    # Generate capture moves only
     for y in range(board.y_size):
         for x in range(board.x_size):
             loc = board.loc(x, y)
-            if board.board[loc] == pla:
-                head = board.group_head[loc]
-                if head not in seen:
-                    seen.add(head)
-                    if board.group_liberty_count[head] == 1:
-                        return True
-    return False
+            if board.board[loc] != Board.EMPTY:
+                continue
+            
+            # Skip non-capture moves
+            if not _is_capture_move(board, pla, loc):
+                continue
+            
+            # Skip suicides
+            if board.would_be_single_stone_suicide(pla, loc):
+                continue
+            
+            # Skip ko
+            if loc == board.simple_ko_point:
+                continue
+            
+            position.push(loc)
+            
+            # Skip superko violations
+            if position.is_superko_repeat():
+                position.pop()
+                continue
+            
+            score = -quiescence(position, -beta, -alpha, qdepth - 1)
+            position.pop()
+            
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+    
+    return alpha
 
 
 def negamax(position: Position, depth: int, alpha: float, beta: float,
             max_depth: int) -> tuple[float, int]:
-    """Negamax alpha-beta with undo-based play.
-
+    """Negamax alpha-beta with TT, PVS, and LMR.
+    
     Returns (score, best_move_loc) from the current player's perspective.
     Positive score = current player is winning.
     """
     board = position.board
-
+    original_alpha = alpha
+    
+    # ── TT Probe ──
+    zobrist = board.sit_zobrist()
+    tt_score, tt_move = tt_probe(zobrist, depth, alpha, beta)
+    if tt_score is not None:
+        return tt_score, tt_move if tt_move is not None else Board.PASS_LOC
+    
     # ── Terminal: two consecutive passes = game over ──
     if position.pass_count >= 2:
         bs, ws = final_score(position)
         raw = bs - ws  # positive = Black ahead
-        return (raw if position.black_to_play else -raw), Board.PASS_LOC
-
-    # ── Leaf: depth exhausted ──
+        result_score = (raw if position.black_to_play else -raw)
+        tt_store(zobrist, depth, result_score, TT_EXACT, Board.PASS_LOC)
+        return result_score, Board.PASS_LOC
+    
+    # ── Leaf: depth exhausted, use quiescence search ──
     if depth <= 0:
-        return _eval_for_current_player(position), Board.PASS_LOC
-
+        leaf_score = quiescence(position, alpha, beta)
+        tt_store(zobrist, depth, leaf_score, TT_EXACT, Board.PASS_LOC)
+        return leaf_score, Board.PASS_LOC
+    
     pla = position.current_player
     opp = position.opponent
     current_depth_idx = max_depth - depth
-
+    
     # ── Null move pruning ──
     # Safety: skip if pass_count > 0, depth ≤ 2, or friendly group in atari
     if (depth > 2 and
             position.pass_count == 0 and
-            not _has_group_in_atari(board, pla)):
+            position.atari_count[pla] == 0):
         # Try passing at reduced depth
         position.push(Board.PASS_LOC)
         null_score, _ = negamax(position, depth - 3, -beta, -beta + 0.01, max_depth)
         null_score = -null_score
         position.pop()
         if null_score >= beta:
+            tt_store(zobrist, depth, beta, TT_LOWER, Board.PASS_LOC)
             return beta, Board.PASS_LOC
-
+    
+    # ── Futility pruning ──
+    # At shallow depths near leaves, if static eval + margin is still below alpha,
+    # prune the entire subtree (no move can raise the score enough).
+    if (1 <= depth <= 3 and
+            abs(alpha) < 500 and
+            position.atari_count[pla] == 0):
+        static = _eval_for_current_player_cheap(position)
+        margin = FUTILITY_MARGIN[depth]
+        if static + margin <= alpha:
+            return alpha, Board.PASS_LOC
+    
     # ── Generate moves ──
     killers_for_depth = _killers[current_depth_idx] if current_depth_idx < len(_killers) else None
-    candidate_moves = move_gen(position, killers=killers_for_depth)
-
+    candidate_moves = move_gen(position, killers=killers_for_depth, history=_history)
+    
+    # Try TT move first (best move hint for move ordering)
+    if tt_move is not None and tt_move not in candidate_moves:
+        if board.would_be_legal(pla, tt_move):
+            candidate_moves.insert(0, tt_move)
+    
     # Append pass as the last option
     candidate_moves.append(Board.PASS_LOC)
-
+    
     best_move = Board.PASS_LOC
     best_score = -_INF
-
-    for move in candidate_moves:
+    is_first_move = True
+    
+    for move_idx, move in enumerate(candidate_moves):
+        is_capture = (move != Board.PASS_LOC and _is_capture_move(board, pla, move))
+        is_killer = (killers_for_depth is not None and 
+                     move in killers_for_depth)
+        
+        # LMR: reduce depth for late, non-promising moves
+        reduction = 0
+        if not is_first_move and not is_capture and not is_killer:
+            reduction = _lmr_reduction(depth, move_idx)
+        
         position.push(move)
-        score, _ = negamax(position, depth - 1, -beta, -alpha, max_depth)
-        score = -score
+        
+        # Superko check: skip moves that repeat a prior board position
+        if position.is_superko_repeat():
+            position.pop()
+            continue
+        
+        # PVS: first move gets full window, others get zero-window
+        if is_first_move:
+            score, _ = negamax(position, depth - 1, -beta, -alpha, max_depth)
+            score = -score
+            is_first_move = False
+        else:
+            # Zero-window search (with LMR reduction)
+            score, _ = negamax(position, depth - 1 - reduction, -alpha - 1, -alpha, max_depth)
+            score = -score
+            
+            # Re-search if promising
+            if score > alpha and (reduction > 0 or score < beta):
+                score, _ = negamax(position, depth - 1, -beta, -alpha, max_depth)
+                score = -score
+        
         position.pop()
-
+        
         if score > best_score:
             best_score = score
             best_move = move
-
+        
         if score > alpha:
             alpha = score
-
+        
         if alpha >= beta:
             # Beta cutoff — update killer and history tables
             if move != Board.PASS_LOC:
                 _update_killers(current_depth_idx, move)
                 _update_history(pla, move, depth)
             break
-
+    
+    # ── TT Store ──
+    if best_score <= original_alpha:
+        flag = TT_UPPER
+    elif best_score >= beta:
+        flag = TT_LOWER
+    else:
+        flag = TT_EXACT
+    tt_store(zobrist, depth, best_score, flag, best_move)
+    
     return best_score, best_move
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 4. Iterative Deepening with Aspiration Windows
+# 4. Iterative Deepening with Widening Aspiration Windows
 # ═══════════════════════════════════════════════════════════════════════
+
+from opening import book_lookup
+
 
 def get_best_move(position: Position, search_depth: int = 5) -> int:
     """Entry point: find the best move using iterative deepening.
-
+    
+    Checks opening book first (eliminates search for move 1–3).
+    Uses:
+    - Transposition table (cleared once per search)
+    - History table (persisted across ID iterations, aged between them)
+    - Killer moves (reset for each depth level)
+    - Widening aspiration windows for efficiency
+    
     Returns a KataGo loc (use Board.PASS_LOC for pass).
     """
-    _init_search_tables(search_depth)
-
+    # ── Check opening book first ──
+    book_move = book_lookup(position.board)
+    if book_move is not None:
+        return book_move
+    
+    tt_clear()           # Clear TT once per root search
+    _init_history()      # Initialize history once per root search
+    _init_killers(search_depth)  # Initialize killers ONCE for max depth
+    
     best_move = Board.PASS_LOC
     prev_score = 0.0
-
+    
     for depth in range(1, search_depth + 1):
+        # Age history between ID iterations (killers stay; we just search deeper)
+        if depth > 1:
+            _age_history()
+        
         if depth <= 2:
             # Shallow depths: full window
             alpha = -_INF
             beta = _INF
+            score, move = negamax(position, depth, alpha, beta, max_depth=depth)
         else:
-            # Aspiration window: ±1.5 from previous iteration
-            alpha = prev_score - 1.5
-            beta = prev_score + 1.5
-
-        score, move = negamax(position, depth, alpha, beta, max_depth=depth)
-
-        # Handle aspiration window failures
-        if score <= alpha:
-            # Fail-low: re-search with full alpha
-            score, move = negamax(position, depth, -_INF, beta, max_depth=depth)
-        elif score >= beta:
-            # Fail-high: re-search with full beta
-            score, move = negamax(position, depth, alpha, _INF, max_depth=depth)
-
+            # Widening aspiration window for depth >= 3
+            delta = 3.0
+            alpha = prev_score - delta
+            beta = prev_score + delta
+            
+            while True:
+                score, move = negamax(position, depth, alpha, beta, max_depth=depth)
+                
+                if score <= alpha:
+                    # Fail-low: widen lower bound
+                    alpha -= delta * 2
+                    delta *= 2
+                elif score >= beta:
+                    # Fail-high: widen upper bound
+                    beta += delta * 2
+                    delta *= 2
+                else:
+                    # Score inside window — good
+                    break
+        
         prev_score = score
         best_move = move
-
+    
     return best_move
