@@ -1,50 +1,80 @@
 import random
 import numpy as np
 
+# ─── Custom Types ───────────────────────────────────────────────────
+# For clarity and static analysis in larger projects.
+Pos = int    # Represents a 1D index into the board array.
+Loc = int    # Synonymous with Pos, used for "location".
+Player = int # 0: Empty, 1: Black, 2: White, 3: Wall
+
 class IllegalMoveError(ValueError):
+    """Exception raised for moves that violate Go rules (occupied, suicide, simple ko)."""
     pass
 
-Pos = int
-Loc = int
-Player = int
+# ─── Board Representation ───────────────────────────────────────────
 
-#Implements legal moves without superko (superko is handled by Position in environment.py)
 class Board:
+    """
+    Lower-level Go board implementation using an 'undo-based' architecture.
+    
+    KEY DESIGN CHARACTERISTICS:
+    1. 1D Array Layout: The board is represented as a single flat NumPy array
+       with 'walls' padded around the edges to simplify boundary checks.
+    2. Linked-List Groups: Stones in the same group (string) are joined in a 
+       doubly-linked circular list. This allows O(stones) iteration through a group
+       without global board scans.
+    3. Incremental Bookkeeping: Liberty counts and stone counts are updated
+       incrementally as stones are added/removed.
+    4. Zobrist Hashing: Fast board fingerprinting for ko and superko detection.
+    """
+    
+    # Constants for board contents
     EMPTY = 0
     BLACK = 1
     WHITE = 2
     WALL = 3
 
-    ZOBRIST_STONE = [[],[],[],[]]
-    ZOBRIST_PLA = []
+    # Zobrist random bitstrings for hashing
+    ZOBRIST_STONE = [[],[],[],[]] # [color][loc]
+    ZOBRIST_PLA = []              # [color] — toggled on every move
 
     ZOBRIST_RAND = random.Random()
     ZOBRIST_RAND.seed(123987456)
 
-    PASS_LOC = 0
+    PASS_LOC = 0 # Unique index representing a 'pass' move.
 
+    # Pre-generate random bits for all possible board locations.
     for i in range((50+1)*(50+2)+1):
         ZOBRIST_STONE[BLACK].append(ZOBRIST_RAND.getrandbits(64))
         ZOBRIST_STONE[WHITE].append(ZOBRIST_RAND.getrandbits(64))
     for i in range(4):
         ZOBRIST_PLA.append(ZOBRIST_RAND.getrandbits(64))
 
-    def __init__(self,size,copy_other=None):
-        if isinstance(size,int):
+    def __init__(self, size, copy_other=None):
+        """
+        Initialize a new Board or create a copy of an existing one.
+        
+        Args:
+            size: int (for square) or (x,y) tuple.
+            copy_other: If provided, performs a 'deep copy' of this board's state.
+        """
+        if isinstance(size, int):
             self.x_size = size
             self.y_size = size
         else:
             self.x_size, self.y_size = size
-        if self.x_size < 2 or self.x_size > 50:
-            raise ValueError("Invalid board size: " + str(size))
-        if self.y_size < 2 or self.y_size > 50:
-            raise ValueError("Invalid board size: " + str(size))
-        self.arrsize = (self.x_size+1)*(self.y_size+2)+1
-        self.dy = self.x_size+1
-        self.adj = [-self.dy,-1,1,self.dy]
-        self.diag = [-self.dy-1,-self.dy+1,self.dy-1,self.dy+1]
+            
+        if not (2 <= self.x_size <= 50 and 2 <= self.y_size <= 50):
+             raise ValueError(f"Invalid board size: {size}")
+
+        # The internal array is slightly larger to accommodate 'walls'.
+        self.arrsize = (self.x_size + 1) * (self.y_size + 2) + 1
+        self.dy = self.x_size + 1
+        self.adj = [-self.dy, -1, 1, self.dy]       # North, West, East, South offsets
+        self.diag = [-self.dy-1, -self.dy+1, self.dy-1, self.dy+1] # Diagonal offsets
 
         if copy_other is not None:
+            # Efficiently clone an existing board's state.
             self.pla = copy_other.pla
             self.board = np.copy(copy_other.board)
             self.group_head = np.copy(copy_other.group_head)
@@ -57,6 +87,7 @@ class Board:
             self.num_captures_made = copy_other.num_captures_made.copy()
             self.num_non_pass_moves_made = copy_other.num_non_pass_moves_made.copy()
         else:
+            # Initialize a fresh empty board.
             self.pla = Board.BLACK
             self.board = np.zeros(shape=(self.arrsize), dtype=np.int8)
             self.group_head = np.zeros(shape=(self.arrsize), dtype=np.int16)
@@ -69,54 +100,80 @@ class Board:
             self.num_captures_made = {Board.BLACK: 0, Board.WHITE: 0}
             self.num_non_pass_moves_made = {Board.BLACK: 0, Board.WHITE: 0}
 
-            for i in range(-1,self.x_size+1):
-                self.board[self.loc(i,-1)] = Board.WALL
-                self.board[self.loc(i,self.y_size)] = Board.WALL
-            for i in range(-1,self.y_size+1):
-                self.board[self.loc(-1,i)] = Board.WALL
-                self.board[self.loc(self.x_size,i)] = Board.WALL
+            # Seed 'WALL' values around the play area to prevent out-of-bounds checks in search loops.
+            for i in range(-1, self.x_size + 1):
+                self.board[self.loc(i, -1)] = Board.WALL
+                self.board[self.loc(i, self.y_size)] = Board.WALL
+            for i in range(-1, self.y_size + 1):
+                self.board[self.loc(-1, i)] = Board.WALL
+                self.board[self.loc(self.x_size, i)] = Board.WALL
 
-            #More-easily catch errors
+            # Index 0 is reserved; set metadata to -1 to help catch indexing bugs.
             self.group_head[0] = -1
             self.group_next[0] = -1
             self.group_prev[0] = -1
 
+    # ─── Coordinate Conversion ──────────────────────────────────────
+
     def copy(self):
-        return Board((self.x_size,self.y_size),copy_other=self)
+        """Create a deep copy of the board."""
+        return Board((self.x_size, self.y_size), copy_other=self)
 
     @staticmethod
     def get_opp(pla):
-        return 3-pla
+        """Return the opponent's color (BLACK <-> WHITE)."""
+        return 3 - pla
+
     @staticmethod
-    def loc_static(x,y,x_size):
-        return (x+1) + (x_size+1)*(y+1)
+    def loc_static(x, y, x_size):
+        """Static helper to convert (x,y) to 1D loc without a board instance."""
+        return (x + 1) + (x_size + 1) * (y + 1)
 
-    def loc(self,x,y):
-        return (x+1) + self.dy*(y+1)
-    def loc_x(self,loc):
-        return (loc % self.dy)-1
-    def loc_y(self,loc):
-        return (loc // self.dy)-1
+    def loc(self, x, y):
+        """Convert (x, y) coordinates to internal 1D array index."""
+        return (x + 1) + self.dy * (y + 1)
 
-    def is_adjacent(self,loc1,loc2):
+    def loc_x(self, loc):
+        """Convert 1D array index back to x coordinate."""
+        return (loc % self.dy) - 1
+
+    def loc_y(self, loc):
+        """Convert 1D array index back to y coordinate."""
+        return (loc // self.dy) - 1
+
+    def is_adjacent(self, loc1, loc2):
+        """Check if two 1D locations are Manhattan-adjacent (N, S, E, W)."""
         return loc1 == loc2 + self.adj[0] or loc1 == loc2 + self.adj[1] or loc1 == loc2 + self.adj[2] or loc1 == loc2 + self.adj[3]
 
     def pos_zobrist(self):
+        """Return the Zobrist hash of the current stone arrangement."""
         return self.zobrist
+
     def sit_zobrist(self):
+        """Return the Zobrist hash including 'side to move' (situational)."""
         return self.zobrist ^ Board.ZOBRIST_PLA[self.pla]
 
-    def num_liberties(self,loc):
+    def num_liberties(self, loc):
+        """Return the number of liberties for the group at this location."""
         if self.board[loc] == Board.EMPTY or self.board[loc] == Board.WALL:
             return 0
         return self.group_liberty_count[self.group_head[loc]]
 
-    def is_simple_eye(self,pla,loc):
+    # ─── Move Validation Logic ──────────────────────────────────────────
+
+    def is_simple_eye(self, pla, loc):
+        """
+        Heuristic to detect a 'one-point eye' for a given player.
+        
+        Strict eye-filling is usually bad play, so engines often use this to 
+        filter pointless moves.
+        """
         adj0 = loc + self.adj[0]
         adj1 = loc + self.adj[1]
         adj2 = loc + self.adj[2]
         adj3 = loc + self.adj[3]
 
+        # All adjacent points must be player stones or walls.
         if (self.board[adj0] != pla and self.board[adj0] != Board.WALL) or \
            (self.board[adj1] != pla and self.board[adj1] != Board.WALL) or \
            (self.board[adj2] != pla and self.board[adj2] != Board.WALL) or \
@@ -138,6 +195,8 @@ class Board:
         if self.board[diag3] == opp:
             opp_corners += 1
 
+        # A point is an eye if it has < 2 opponent stones on corners (for center)
+        # or 0 opponent stones on corners (for edges/walls).
         if opp_corners >= 2:
             return False
         if opp_corners <= 0:
@@ -155,7 +214,8 @@ class Board:
         return True
 
 
-    def would_be_legal(self,pla,loc):
+    def would_be_legal(self, pla, loc):
+        """Check if playing 'pla' at 'loc' is legal under non-superko rules."""
         if pla != Board.BLACK and pla != Board.WHITE:
             return False
         if loc == Board.PASS_LOC:
@@ -164,13 +224,14 @@ class Board:
             return False
         if self.board[loc] != Board.EMPTY:
             return False
-        if self.would_be_single_stone_suicide(pla,loc):
+        if self.would_be_single_stone_suicide(pla, loc):
             return False
         if loc == self.simple_ko_point:
             return False
         return True
 
-    def would_be_suicide(self,pla,loc):
+    def would_be_suicide(self, pla, loc):
+        """Check if placing a stone at 'loc' would result in its immediate removal."""
         adj0 = loc + self.adj[0]
         adj1 = loc + self.adj[1]
         adj2 = loc + self.adj[2]
@@ -178,13 +239,14 @@ class Board:
 
         opp = Board.get_opp(pla)
 
-        #If empty or capture, then not suicide
+        # If any adjacent point is empty or results in an opponent capture, it's NOT suicide.
         if self.board[adj0] == Board.EMPTY or (self.board[adj0] == opp and self.group_liberty_count[self.group_head[adj0]] == 1) or \
            self.board[adj1] == Board.EMPTY or (self.board[adj1] == opp and self.group_liberty_count[self.group_head[adj1]] == 1) or \
            self.board[adj2] == Board.EMPTY or (self.board[adj2] == opp and self.group_liberty_count[self.group_head[adj2]] == 1) or \
            self.board[adj3] == Board.EMPTY or (self.board[adj3] == opp and self.group_liberty_count[self.group_head[adj3]] == 1):
             return False
-        #If connects to own stone with enough liberties, then not suicide
+            
+        # If it connects to a friendly group with >1 liberty, it's NOT suicide.
         if self.board[adj0] == pla and self.group_liberty_count[self.group_head[adj0]] > 1 or \
            self.board[adj1] == pla and self.group_liberty_count[self.group_head[adj1]] > 1 or \
            self.board[adj2] == pla and self.group_liberty_count[self.group_head[adj2]] > 1 or \
@@ -192,7 +254,8 @@ class Board:
             return False
         return True
 
-    def would_be_single_stone_suicide(self,pla,loc):
+    def would_be_single_stone_suicide(self, pla, loc):
+        """Check if a move is suicide and DOES NOT capture any opponent stones."""
         adj0 = loc + self.adj[0]
         adj1 = loc + self.adj[1]
         adj2 = loc + self.adj[2]
@@ -200,13 +263,13 @@ class Board:
 
         opp = Board.get_opp(pla)
 
-        #If empty or capture, then not suicide
         if self.board[adj0] == Board.EMPTY or (self.board[adj0] == opp and self.group_liberty_count[self.group_head[adj0]] == 1) or \
            self.board[adj1] == Board.EMPTY or (self.board[adj1] == opp and self.group_liberty_count[self.group_head[adj1]] == 1) or \
            self.board[adj2] == Board.EMPTY or (self.board[adj2] == opp and self.group_liberty_count[self.group_head[adj2]] == 1) or \
            self.board[adj3] == Board.EMPTY or (self.board[adj3] == opp and self.group_liberty_count[self.group_head[adj3]] == 1):
             return False
-        #If connects to own stone, then not single stone suicide
+            
+        # If it connects to ANY existing friendly stone, it's not a 'single stone' suicide.
         if self.board[adj0] == pla or \
            self.board[adj1] == pla or \
            self.board[adj2] == pla or \
@@ -214,22 +277,30 @@ class Board:
             return False
         return True
 
-    #Returns the number of liberties a new stone placed here would have, or maxLibs if it would be >= maxLibs.
-    def get_liberties_after_play(self,pla,loc,maxLibs):
+    def get_liberties_after_play(self, pla, loc, maxLibs):
+        """
+        Count how many liberties a new stone at 'loc' would have.
+        
+        Optimized to stop counting once 'maxLibs' is reached. Used by the 
+        ladder search and other heuristics.
+        """
         opp = Board.get_opp(pla)
         libs = []
         capturedGroupHeads = []
 
-        #First, count immediate liberties and groups that would be captured
+        # Step 1: Count immediate empty adjacent points and groups that would be captured.
         for i in range(4):
             adj = loc + self.adj[i]
             if self.board[adj] == Board.EMPTY:
-                libs.append(adj)
+                if adj not in libs:
+                    libs.append(adj)
                 if len(libs) >= maxLibs:
                     return maxLibs
 
             elif self.board[adj] == opp and self.num_liberties(adj) == 1:
-                libs.append(adj)
+                # If we capture a group, its former location becomes a liberty for the new stone.
+                if adj not in libs:
+                    libs.append(adj)
                 if len(libs) >= maxLibs:
                     return maxLibs
 
@@ -238,13 +309,15 @@ class Board:
                     capturedGroupHeads.append(head)
 
         def wouldBeEmpty(possibleLib):
+            """Check if a point will be empty after the move is processed."""
             if self.board[possibleLib] == Board.EMPTY:
                 return True
             elif self.board[possibleLib] == opp:
+                # Opponent groups with 1 liberty will be removed.
                 return (self.group_head[possibleLib] in capturedGroupHeads)
             return False
 
-        #Next, walk through all stones of all surrounding groups we would connect with and count liberties, avoiding overlap.
+        # Step 2: Iterate through all stones of friendly groups we connect to.
         connectingGroupHeads = []
         for i in range(4):
             adj = loc + self.adj[i]
@@ -253,6 +326,7 @@ class Board:
                 if head not in connectingGroupHeads:
                     connectingGroupHeads.append(head)
 
+                    # Iterate through the linked-list of stones in the combined group.
                     cur = adj
                     while True:
                         for k in range(4):
@@ -268,24 +342,27 @@ class Board:
 
         return len(libs)
 
+    # ─── Display Helpers ────────────────────────────────────────────────
 
     def to_string(self):
-        def get_piece(x,y):
-            loc = self.loc(x,y)
+        """Return a basic text representation of the board."""
+        def get_piece(x, y):
+            loc = self.loc(x, y)
             if self.board[loc] == Board.BLACK:
                 return 'X '
             elif self.board[loc] == Board.WHITE:
                 return 'O '
             elif (x == 3 or x == self.x_size/2 or x == self.x_size-1-3) and (y == 3 or y == self.y_size/2 or y == self.y_size-1-3):
-                return '* '
+                return '* ' # Star points (Hoshi)
             else:
                 return '. '
 
-        return "\n".join("".join(get_piece(x,y) for x in range(self.x_size)) for y in range(self.y_size))
+        return "\n".join("".join(get_piece(x, y) for x in range(self.x_size)) for y in range(self.y_size))
 
     def to_liberty_string(self):
-        def get_piece(x,y):
-            loc = self.loc(x,y)
+        """Return a board maps showing liberty counts for each stone."""
+        def get_piece(x, y):
+            loc = self.loc(x, y)
             if self.board[loc] == Board.BLACK or self.board[loc] == Board.WHITE:
                 libs = self.group_liberty_count[self.group_head[loc]]
                 if libs <= 9:
@@ -297,37 +374,47 @@ class Board:
             else:
                 return '. '
 
-        return "\n".join("".join(get_piece(x,y) for x in range(self.x_size)) for y in range(self.y_size))
+        return "\n".join("".join(get_piece(x, y) for x in range(self.x_size)) for y in range(self.y_size))
 
-    def set_pla(self,pla):
+    def set_pla(self, pla):
+        """Manually set the current player to move."""
         self.pla = pla
-    def is_on_board(self,loc):
-        return loc >= 0 and loc < self.arrsize and self.board[loc] != Board.WALL
 
-    #Set a given location with error checking. Suicide setting allowed.
-    def set_stone(self,pla,loc):
+    def is_on_board(self, loc):
+        """Check if a 1D location index is within the playable area (not a wall)."""
+        return 0 <= loc < self.arrsize and self.board[loc] != Board.WALL
+
+    # ─── Board Mutation & Undo ──────────────────────────────────────────
+
+    def set_stone(self, pla, loc):
+        """
+        Forcefully set a location to a given color or EMPTY.
+        
+        This clears the ko point and handles group merging/removal automatically.
+        """
         if pla != Board.EMPTY and pla != Board.BLACK and pla != Board.WHITE:
             raise IllegalMoveError("Invalid pla for board.set")
         if not self.is_on_board(loc):
             raise IllegalMoveError("Invalid loc for board.set")
 
         if self.board[loc] == pla:
-            pass
+            return
         elif self.board[loc] == Board.EMPTY:
-            self.add_unsafe(pla,loc)
+            self.add_unsafe(pla, loc)
         elif pla == Board.EMPTY:
             self.remove_single_stone_unsafe(loc)
         else:
             self.remove_single_stone_unsafe(loc)
-            self.add_unsafe(pla,loc)
+            self.add_unsafe(pla, loc)
 
-        #Clear any ko restrictions
         self.simple_ko_point = None
 
-
-    #Play a stone at the given location, with non-superko legality checking and updating the pla and simple ko point
-    #Single stone suicide is disallowed but suicide is allowed, to support rule sets and sgfs that have suicide
-    def play(self,pla,loc):
+    def play(self, pla, loc):
+        """
+        Execute a move with full legality checks (occupied, suicide, ko).
+        
+        Does NOT check positional superko (handled by environment.Position).
+        """
         if pla != Board.BLACK and pla != Board.WHITE:
             raise IllegalMoveError("Invalid pla for board.play")
 
@@ -336,42 +423,57 @@ class Board:
                 raise IllegalMoveError("Invalid loc for board.set")
             if self.board[loc] != Board.EMPTY:
                 raise IllegalMoveError("Location is nonempty")
-            if self.would_be_single_stone_suicide(pla,loc):
+            if self.would_be_single_stone_suicide(pla, loc):
                 raise IllegalMoveError("Move would be illegal single stone suicide")
             if loc == self.simple_ko_point:
                 raise IllegalMoveError("Move would be illegal simple ko recapture")
 
-        self.playUnsafe(pla,loc)
+        self.playUnsafe(pla, loc)
 
-    def playUnsafe(self,pla,loc):
+    def playUnsafe(self, pla, loc):
+        """Execute a move WITHOUT performing legality checks."""
         if loc == Board.PASS_LOC:
             self.simple_ko_point = None
             self.pla = Board.get_opp(pla)
         else:
-            self.add_unsafe(pla,loc)
+            self.add_unsafe(pla, loc)
             self.pla = Board.get_opp(pla)
 
-    def playRecordedUnsafe(self,pla,loc):
+    def playRecordedUnsafe(self, pla, loc):
+        """
+        Execute a move and return an opaque record used to undo it.
+        
+        This is used throughout the search tree to avoid copying the whole board.
+        """
         capDirs = []
         opp = Board.get_opp(pla)
         old_simple_ko_point = self.simple_ko_point
+        
+        # Determine which adjacent opponent groups will be captured.
         for i in range(4):
             adj = loc + self.adj[i]
             if self.board[adj] == opp and self.group_liberty_count[self.group_head[adj]] == 1:
                 capDirs.append(i)
+                
         old_num_captures_made = self.num_captures_made.copy()
         old_num_non_pass_moves_made = self.num_non_pass_moves_made.copy()
 
-        self.playUnsafe(pla,loc)
+        self.playUnsafe(pla, loc)
 
-        #Suicide
+        # Suicide check: did the move result in the stone being captured immediately?
         selfCap = False
         if self.board[loc] == Board.EMPTY:
             selfCap = True
-        return (pla,loc,old_simple_ko_point,capDirs,selfCap,old_num_captures_made,old_num_non_pass_moves_made)
+            
+        return (pla, loc, old_simple_ko_point, capDirs, selfCap, old_num_captures_made, old_num_non_pass_moves_made)
 
-    def undo(self,record):
-        (pla,loc,simple_ko_point,capDirs,selfCap,old_num_captures_made,old_num_non_pass_moves_made) = record
+    def undo(self, record):
+        """
+        Roll back a move created by playRecordedUnsafe().
+        
+        Restores prisoner counts, group data, board contents, and Zobrist hash.
+        """
+        (pla, loc, simple_ko_point, capDirs, selfCap, old_num_captures_made, old_num_non_pass_moves_made) = record
         opp = Board.get_opp(pla)
 
         self.simple_ko_point = simple_ko_point
@@ -382,31 +484,32 @@ class Board:
         if loc == Board.PASS_LOC:
             return
 
-        #Re-fill stones in all captured directions
+        # Restore stones that were captured by this move.
         for capdir in capDirs:
             adj = loc + self.adj[capdir]
             if self.board[adj] == Board.EMPTY:
-                self.floodFillStones(opp,adj)
+                self.floodFillStones(opp, adj)
 
+        # Restore the stone itself if it was a suicide move.
         if selfCap:
-            self.floodFillStones(pla,loc)
+            self.floodFillStones(pla, loc)
 
-        #Delete the stone played here.
+        # Remove the move's stone from the board and revert hash.
         self.zobrist ^= Board.ZOBRIST_STONE[pla][loc]
         self.board[loc] = Board.EMPTY
 
-        #Zero out stuff in preparation for rebuilding
+        # Re-initialize group data at this location for rebuilding.
         head = self.group_head[loc]
         stone_count = self.group_stone_count[head]
         self.group_stone_count[head] = 0
         self.group_liberty_count[head] = 0
 
-        #Uneat enemy liberties
-        self.changeSurroundingLiberties(loc,Board.get_opp(pla),+1)
+        # Increment liberties of surrounding opponent groups (which we had decreased).
+        self.changeSurroundingLiberties(loc, Board.get_opp(pla), +1)
 
-        #If this was not a single stone, we need to recompute the chain from scratch
+        # If the move merged multiple groups, we must rebuild the connected components.
         if stone_count > 1:
-            #Run through the whole chain and make their heads point to nothing
+            # First, decouple all stones in the chain from their old head.
             cur = loc
             while True:
                 self.group_head[cur] = Board.PASS_LOC
@@ -414,36 +517,42 @@ class Board:
                 if cur == loc:
                     break
 
-            #Rebuild each chain adjacent now
+            # Re-floodfill each adjacent sector to rebuild independent group data.
             for i in range(4):
                 adj = loc + self.adj[i]
                 if self.board[adj] == pla and self.group_head[adj] == Board.PASS_LOC:
-                    self.rebuildChain(pla,adj)
+                    self.rebuildChain(pla, adj)
 
         self.group_head[loc] = 0
         self.group_next[loc] = 0
         self.group_prev[loc] = 0
 
 
-    #Add a chain of the given player to the given region of empty space, floodfilling it.
-    #Assumes that this region does not border any chains of the desired color already
-    def floodFillStones(self,pla,loc):
+    # ─── Group Management (Low Level) ───────────────────────────────────
+
+    def floodFillStones(self, pla, loc):
+        """
+        Flood-fill a region of empty space with stones of player 'pla'.
+        
+        This is used to restore captured stones during an undo operation.
+        """
         head = loc
         self.group_liberty_count[head] = 0
         self.group_stone_count[head] = 0
 
-        #Add a chain with links front <-> ... <-> head <-> head with all head pointers towards head
+        # producess a linear linked list head <-> next <-> ... <-> tail
         front = self.floodFillStonesHelper(head, head, head, pla)
 
-        #Now, we make head point to front, and that completes the circle!
+        # Complete the circularity: tail points to front.
         self.group_next[head] = front
         self.group_prev[front] = head
 
-    #Floodfill a chain of the given color into this region of empty spaces
-    #Make the specified loc the head for all the chains and updates the chainData of head with the number of stones.
-    #Does NOT connect the stones into a circular list. Rather, it produces an linear linked list with the tail pointing
-    #to tailTarget, and returns the head of the list. The tail is guaranteed to be loc.
     def floodFillStonesHelper(self, head, tailTarget, loc, pla):
+        """
+        Recursive helper for floodFillStones.
+        
+        Builds a linear doubly-linked list of stones and updates the Zobrist hash.
+        """
         self.board[loc] = pla
         self.zobrist ^= Board.ZOBRIST_STONE[pla][loc]
 
@@ -452,84 +561,82 @@ class Board:
         self.group_next[loc] = tailTarget
         self.group_prev[tailTarget] = loc
 
-        #Eat enemy liberties
-        self.changeSurroundingLiberties(loc,Board.get_opp(pla),-1)
+        # Decrement liberties of any surrounding opponent groups.
+        self.changeSurroundingLiberties(loc, Board.get_opp(pla), -1)
 
-        #Recursively add stones around us.
+        # Recurse to all adjacent empty spots to expand the group.
         nextTailTarget = loc
         for i in range(4):
             adj = loc + self.adj[i]
             if self.board[adj] == Board.EMPTY:
-                nextTailTarget = self.floodFillStonesHelper(head,nextTailTarget,adj,pla)
+                nextTailTarget = self.floodFillStonesHelper(head, nextTailTarget, adj, pla)
         return nextTailTarget
 
-    #Floods through a chain of the specified player already on the board
-    #rebuilding its links and counting its liberties as we go.
-    #Requires that all their heads point towards
-    #some invalid location, such as PASS_LOC or a location not of color.
-    #The head of the chain will be loc.
-    def rebuildChain(self,pla,loc):
+    def rebuildChain(self, pla, loc):
+        """
+        Re-scans an existing group on the board to rebuild its linked-list metadata.
+        
+        Used after an undo splits a larger group back into its original parts.
+        """
         head = loc
         self.group_liberty_count[head] = 0
         self.group_stone_count[head] = 0
 
-        #Rebuild chain with links front <-> ... <-> head <-> head with all head pointers towards head
         front = self.rebuildChainHelper(head, head, head, pla)
 
-        #Now, we make head point to front, and that completes the circle!
         self.group_next[head] = front
         self.group_prev[front] = head
 
-
-    #Does same thing as addChain, but floods through a chain of the specified color already on the board
-    #rebuilding its links and also counts its liberties as we go. Requires that all their heads point towards
-    #some invalid location, such as NULL_LOC or a location not of color.
     def rebuildChainHelper(self, head, tailTarget, loc, pla):
-        #Count new liberties
+        """Recursive helper for rebuildChain. Calculates liberties while tracing."""
+        # Check all adjacent points for new liberties, avoiding double-counting.
         for dloc in self.adj:
-            if self.board[loc+dloc] == Board.EMPTY and not self.is_group_adjacent(head,loc+dloc):
+            new_lib = loc + dloc
+            if self.board[new_lib] == Board.EMPTY and not self.is_group_adjacent(head, new_lib):
                 self.group_liberty_count[head] += 1
 
-        #Add stone here to the chain by setting its head
         self.group_head[loc] = head
         self.group_stone_count[head] += 1
         self.group_next[loc] = tailTarget
         self.group_prev[tailTarget] = loc
 
-        #Recursively add stones around us.
         nextTailTarget = loc
         for i in range(4):
             adj = loc + self.adj[i]
+            # Recursively find all stones of this group that haven't been processed yet.
             if self.board[adj] == pla and self.group_head[adj] != head:
-                nextTailTarget = self.rebuildChainHelper(head,nextTailTarget,adj,pla)
+                nextTailTarget = self.rebuildChainHelper(head, nextTailTarget, adj, pla)
         return nextTailTarget
 
 
-    #Add a stone, assumes that the location is empty without checking
-    def add_unsafe(self,pla,loc):
+    def add_unsafe(self, pla, loc):
+        """
+        Place a stone at 'loc' and update all group metadata.
+        
+        This handles capturing opponent stones, potential suicide, and 
+        merging with adjacent friendly groups.
+        """
         opp = Board.get_opp(pla)
 
-        #Put the stone down
+        # Put the stone down and update fingerprint.
         self.board[loc] = pla
         self.zobrist ^= Board.ZOBRIST_STONE[pla][loc]
 
-        #Initialize the group for that stone
+        # Initialize the group specifically for this single stone.
         self.group_head[loc] = loc
         self.group_stone_count[loc] = 1
-        liberties = 0
-        for dloc in self.adj:
-            if self.board[loc+dloc] == Board.EMPTY:
-                liberties += 1
-        self.group_liberty_count[loc] = liberties
+        self.group_liberty_count[loc] = self.countImmediateLiberties(loc)
         self.group_next[loc] = loc
         self.group_prev[loc] = loc
 
-        #Fill surrounding liberties of all adjacent groups
-        #Carefully avoid doublecounting
+        # Subtract one liberty from all adjacent groups (they are now partially blocked).
         adj0 = loc + self.adj[0]
         adj1 = loc + self.adj[1]
         adj2 = loc + self.adj[2]
         adj3 = loc + self.adj[3]
+        
+        # We must be careful not to subtract multiple liberties from the same group
+        # if the new stone borders it on multiple sides.
         if self.board[adj0] == Board.BLACK or self.board[adj0] == Board.WHITE:
             self.group_liberty_count[self.group_head[adj0]] -= 1
         if self.board[adj1] == Board.BLACK or self.board[adj1] == Board.WHITE:
@@ -545,17 +652,17 @@ class Board:
                self.group_head[adj3] != self.group_head[adj2]:
                 self.group_liberty_count[self.group_head[adj3]] -= 1
 
-        #Merge groups
+        # If adjacent to friendly stones, merge this stone into their group.
         if self.board[adj0] == pla:
-            self.merge_unsafe(loc,adj0)
+            self.merge_unsafe(loc, adj0)
         if self.board[adj1] == pla:
-            self.merge_unsafe(loc,adj1)
+            self.merge_unsafe(loc, adj1)
         if self.board[adj2] == pla:
-            self.merge_unsafe(loc,adj2)
+            self.merge_unsafe(loc, adj2)
         if self.board[adj3] == pla:
-            self.merge_unsafe(loc,adj3)
+            self.merge_unsafe(loc, adj3)
 
-        #Resolve captures
+        # Resolve captures: check if any opponent groups now have 0 liberties.
         opp_stones_captured = 0
         caploc = 0
         if self.board[adj0] == opp and self.group_liberty_count[self.group_head[adj0]] == 0:
@@ -575,7 +682,7 @@ class Board:
             caploc = adj3
             self.remove_unsafe(adj3)
 
-        #Suicide
+        # Suicide check: if the stone we just played has 0 liberties, it captures itself.
         pla_stones_captured = 0
         if self.group_liberty_count[self.group_head[loc]] == 0:
             pla_stones_captured += self.group_stone_count[self.group_head[loc]]
@@ -585,7 +692,8 @@ class Board:
         self.num_captures_made[opp] += opp_stones_captured
         self.num_non_pass_moves_made[pla] += 1
 
-        #Update ko point for legality checking
+        # Simple Ko Rule: if exactly one stone was captured and the capturing group
+        # is also a single stone in atari, that point is forbidden for the next turn.
         if opp_stones_captured == 1 and \
            self.group_stone_count[self.group_head[loc]] == 1 and \
            self.group_liberty_count[self.group_head[loc]] == 1:
@@ -593,9 +701,8 @@ class Board:
         else:
             self.simple_ko_point = None
 
-    #Apply the specified delta to the liberties of all adjacent groups of the specified color
-    def changeSurroundingLiberties(self,loc,pla,delta):
-        #Carefully avoid doublecounting
+    def changeSurroundingLiberties(self, loc, pla, delta):
+        """Update the liberty counts of all groups of 'pla' bordering 'loc'."""
         adj0 = loc + self.adj[0]
         adj1 = loc + self.adj[1]
         adj2 = loc + self.adj[2]
@@ -615,23 +722,16 @@ class Board:
                self.group_head[adj3] != self.group_head[adj2]:
                 self.group_liberty_count[self.group_head[adj3]] += delta
 
-    def countImmediateLiberties(self,loc):
-        adj0 = loc + self.adj[0]
-        adj1 = loc + self.adj[1]
-        adj2 = loc + self.adj[2]
-        adj3 = loc + self.adj[3]
+    def countImmediateLiberties(self, loc):
+        """Manually count empty intersections around a single board location."""
         count = 0
-        if self.board[adj0] == Board.EMPTY:
-            count += 1
-        if self.board[adj1] == Board.EMPTY:
-            count += 1
-        if self.board[adj2] == Board.EMPTY:
-            count += 1
-        if self.board[adj3] == Board.EMPTY:
-            count += 1
+        for i in range(4):
+            if self.board[loc + self.adj[i]] == Board.EMPTY:
+                count += 1
         return count
 
-    def is_group_adjacent(self,head,loc):
+    def is_group_adjacent(self, head, loc):
+        """Check if any stone in the group 'head' is touching 'loc'."""
         return (
             self.group_head[loc+self.adj[0]] == head or \
             self.group_head[loc+self.adj[1]] == head or \
@@ -639,8 +739,12 @@ class Board:
             self.group_head[loc+self.adj[3]] == head
         )
 
-    #Helper, merge two groups assuming they're owned by the same player and adjacent
-    def merge_unsafe(self,loc0,loc1):
+    def merge_unsafe(self, loc0, loc1):
+        """
+        Merge the groups containing 'loc0' and 'loc1'.
+        
+        Optimized by merging the smaller group into the larger one.
+        """
         if self.group_stone_count[self.group_head[loc0]] >= self.group_stone_count[self.group_head[loc1]]:
             parent = loc0
             child = loc1
@@ -651,11 +755,13 @@ class Board:
         phead = self.group_head[parent]
         chead = self.group_head[child]
         if phead == chead:
-            return
+            return # Already in the same group.
 
-        #Walk the child group assigning the new head and simultaneously counting liberties
+        # Calculate new group properties.
         new_stone_count = self.group_stone_count[phead] + self.group_stone_count[chead]
         new_liberties = self.group_liberty_count[phead]
+        
+        # Traverse the 'child' group stones to reassign their head and count unique liberties.
         loc = child
         while True:
             adj0 = loc + self.adj[0]
@@ -663,34 +769,30 @@ class Board:
             adj2 = loc + self.adj[2]
             adj3 = loc + self.adj[3]
 
-            #Any adjacent empty space is a new liberty as long as it isn't adjacent to the parent
-            if self.board[adj0] == Board.EMPTY and not self.is_group_adjacent(phead,adj0):
+            # A point is a new liberty if it's EMPTY and NOT already adjacent to the 'parent' group.
+            if self.board[adj0] == Board.EMPTY and not self.is_group_adjacent(phead, adj0):
                 new_liberties += 1
-            if self.board[adj1] == Board.EMPTY and not self.is_group_adjacent(phead,adj1):
+            if self.board[adj1] == Board.EMPTY and not self.is_group_adjacent(phead, adj1):
                 new_liberties += 1
-            if self.board[adj2] == Board.EMPTY and not self.is_group_adjacent(phead,adj2):
+            if self.board[adj2] == Board.EMPTY and not self.is_group_adjacent(phead, adj2):
                 new_liberties += 1
-            if self.board[adj3] == Board.EMPTY and not self.is_group_adjacent(phead,adj3):
+            if self.board[adj3] == Board.EMPTY and not self.is_group_adjacent(phead, adj3):
                 new_liberties += 1
 
-            #Now assign the new parent head to take over the child (this also
-            #prevents double-counting liberties)
             self.group_head[loc] = phead
-
-            #Advance around the linked list
             loc = self.group_next[loc]
-            if loc == child:
+            if loc == child: # Circular list end
                 break
 
-        #Zero out the old head
+        # Reset the old child head.
         self.group_stone_count[chead] = 0
         self.group_liberty_count[chead] = 0
 
-        #Update the new head
+        # Update the new parent head.
         self.group_stone_count[phead] = new_stone_count
         self.group_liberty_count[phead] = new_liberties
 
-        #Combine the linked lists
+        # Splice the two circular linked lists together.
         plast = self.group_prev[phead]
         clast = self.group_prev[chead]
         self.group_next[clast] = phead
@@ -698,20 +800,21 @@ class Board:
         self.group_prev[chead] = plast
         self.group_prev[phead] = clast
 
-    #Remove all stones in a group
-    def remove_unsafe(self,group):
+    def remove_unsafe(self, group):
+        """Remove an entire group of stones from the board."""
         head = self.group_head[group]
         pla = self.board[group]
         opp = Board.get_opp(pla)
 
-        #Walk all the stones in the group and delete them
+        # Iterate through every stone in the group.
         loc = group
         while True:
-            #Add a liberty to all surrounding opposing groups, taking care to avoid double counting
+            # When a stone is removed, all adjacent opponent groups gain a liberty.
             adj0 = loc + self.adj[0]
             adj1 = loc + self.adj[1]
             adj2 = loc + self.adj[2]
             adj3 = loc + self.adj[3]
+            
             if self.board[adj0] == opp:
                 self.group_liberty_count[self.group_head[adj0]] += 1
             if self.board[adj1] == opp:
@@ -729,27 +832,29 @@ class Board:
 
             next_loc = self.group_next[loc]
 
-            #Zero out all the stuff
+            # Reset the board square and group info.
             self.board[loc] = Board.EMPTY
-            self.zobrist ^= Board.ZOBRIST_STONE[opp][loc]
+            self.zobrist ^= Board.ZOBRIST_STONE[pla][loc] # Revert hash
             self.group_head[loc] = 0
             self.group_next[loc] = 0
             self.group_prev[loc] = 0
 
-            #Advance around the linked list
             loc = next_loc
             if loc == group:
                 break
 
-        #Zero out the head
         self.group_stone_count[head] = 0
         self.group_liberty_count[head] = 0
 
-    #Remove a single stone
-    def remove_single_stone_unsafe(self,rloc):
+    def remove_single_stone_unsafe(self, rloc):
+        """
+        Remove exactly one stone at 'rloc'.
+        
+        If this stone was part of a larger group, it temporarily removes the whole 
+        group and then re-adds all stones EXCEPT for 'rloc'.
+        """
         pla = self.board[rloc]
 
-        #Record all the stones in the group
         stones = []
         loc = rloc
         while True:
@@ -758,17 +863,16 @@ class Board:
             if loc == rloc:
                 break
 
-        #Remove them all
         self.remove_unsafe(rloc)
 
-        #Then add them back one by one
         for loc in stones:
             if loc != rloc:
-                self.add_unsafe(pla,loc)
+                self.add_unsafe(pla, loc)
 
+    # ─── Heuristic Search Helpers ─────────────────────────────────────
 
-    #Helper, find liberties of group at loc. Fills in buf.
     def findLiberties(self, loc, buf):
+        """Append all empty intersections adjacent to group at 'loc' into 'buf'."""
         cur = loc
         while True:
             for i in range(4):
@@ -776,17 +880,18 @@ class Board:
                 if self.board[lib] == Board.EMPTY:
                     if lib not in buf:
                         buf.append(lib)
-
             cur = self.group_next[cur]
             if cur == loc:
                 break
 
-    #Helper, find captures that gain liberties for the group at loc. Fills in buf
     def findLibertyGainingCaptures(self, loc, buf):
+        """
+        Find all opponent stones adjacent to group 'loc' that are in atari.
+        
+        Capturing these would gain liberties for the group at 'loc'.
+        """
         pla = self.board[loc]
         opp = Board.get_opp(pla)
-
-        #For performance, avoid checking for captures on any chain twice
         chainHeadsChecked = []
 
         cur = loc
@@ -795,19 +900,16 @@ class Board:
                 adj = cur + self.adj[i]
                 if self.board[adj] == opp:
                     head = self.group_head[adj]
-
                     if self.group_liberty_count[head] == 1:
                         if head not in chainHeadsChecked:
-                            #Capturing moves are precisely the liberties of the groups around us with 1 liberty.
                             self.findLiberties(adj, buf)
                             chainHeadsChecked.append(head)
-
             cur = self.group_next[cur]
             if cur == loc:
                 break
 
-    #Helper, does the group at loc have at least one opponent group adjacent to it in atari?
     def hasLibertyGainingCaptures(self, loc):
+        """Check if group at 'loc' can gain liberties by capturing an adjacent opponent."""
         pla = self.board[loc]
         opp = Board.get_opp(pla)
 
@@ -819,17 +921,15 @@ class Board:
                     head = self.group_head[adj]
                     if self.group_liberty_count[head] == 1:
                         return True
-
             cur = self.group_next[cur]
             if cur == loc:
                 break
-
         return False
 
     def wouldBeKoCapture(self, loc, pla):
+        """Check if playing 'pla' at 'loc' would result in a simple ko-style capture."""
         if self.board[loc] != Board.EMPTY:
             return False
-        #Check that surounding points are are all opponent owned and exactly one of them is capturable
         opp = Board.get_opp(pla)
         oppCapturableLoc = None
         for i in range(4):
@@ -844,28 +944,28 @@ class Board:
         if oppCapturableLoc is None:
             return False
 
-        #Check that the capturable loc has exactly one stone
         if self.group_stone_count[self.group_head[oppCapturableLoc]] != 1:
             return False
         return True
 
-    def countHeuristicConnectionLiberties(self,loc,pla):
-        adj0 = loc + self.adj[0]
-        adj1 = loc + self.adj[1]
-        adj2 = loc + self.adj[2]
-        adj3 = loc + self.adj[3]
+    def countHeuristicConnectionLiberties(self, loc, pla):
+        """Estimate potential liberties gained by connecting to adjacent friendly groups."""
         count = 0.0
-        if self.board[adj0] == pla:
-            count += max(0.0,self.group_liberty_count[self.group_head[adj0]]-1.5)
-        if self.board[adj1] == pla:
-            count += max(0.0,self.group_liberty_count[self.group_head[adj1]]-1.5)
-        if self.board[adj2] == pla:
-            count += max(0.0,self.group_liberty_count[self.group_head[adj2]]-1.5)
-        if self.board[adj3] == pla:
-            count += max(0.0,self.group_liberty_count[self.group_head[adj3]]-1.5)
+        for i in range(4):
+            adj = loc + self.adj[i]
+            if self.board[adj] == pla:
+                count += max(0.0, self.group_liberty_count[self.group_head[adj]] - 1.5)
         return count
 
-    def searchIsLadderCapturedAttackerFirst2Libs(self,loc):
+    # ─── Ladder Search (Tactical) ───────────────────────────────────────
+
+    def searchIsLadderCapturedAttackerFirst2Libs(self, loc):
+        """
+        Special case for ladder search: defender has exactly 2 liberties.
+        
+        Returns which of the 2 liberties (if any) allows the attacker to 
+        successfully capture the group in a ladder.
+        """
         if not self.is_on_board(loc):
             return []
         if self.board[loc] != Board.BLACK and self.board[loc] != Board.WHITE:
@@ -873,12 +973,11 @@ class Board:
         if self.group_liberty_count[self.group_head[loc]] != 2:
             return []
 
-        #Make it so that pla is always the defender
         pla = self.board[loc]
         opp = Board.get_opp(pla)
 
         moves = []
-        self.findLiberties(loc,moves)
+        self.findLiberties(loc, moves)
         assert(len(moves) == 2)
 
         move0 = moves[0]
@@ -886,13 +985,13 @@ class Board:
         move0Works = False
         move1Works = False
 
-        if self.would_be_legal(opp,move0):
-            record = self.playRecordedUnsafe(opp,move0)
-            move0Works = self.searchIsLadderCaptured(loc,True)
+        if self.would_be_legal(opp, move0):
+            record = self.playRecordedUnsafe(opp, move0)
+            move0Works = self.searchIsLadderCaptured(loc, True)
             self.undo(record)
-        if self.would_be_legal(opp,move1):
-            record = self.playRecordedUnsafe(opp,move1)
-            move1Works = self.searchIsLadderCaptured(loc,True)
+        if self.would_be_legal(opp, move1):
+            record = self.playRecordedUnsafe(opp, move1)
+            move1Works = self.searchIsLadderCaptured(loc, True)
             self.undo(record)
 
         workingMoves = []
@@ -904,25 +1003,33 @@ class Board:
         return workingMoves
 
 
-    def searchIsLadderCaptured(self,loc,defenderFirst):
+    def searchIsLadderCaptured(self, loc, defenderFirst):
+        """
+        Perform a tactical search to determine if a group is ladder-captured.
+        
+        This is a mini-search within the search that only considers moves
+        at the group's liberties and captures that gain liberties. It uses
+        a manual stack to avoid Python's recursion limit and for performance.
+        """
         if not self.is_on_board(loc):
             return False
         if self.board[loc] != Board.BLACK and self.board[loc] != Board.WHITE:
             return False
 
+        # Termination: if the group already has >2 libs (or >1 if it's our turn),
+        # the ladder has failed for the attacker.
         if self.group_liberty_count[self.group_head[loc]] > 2 or (defenderFirst and self.group_liberty_count[self.group_head[loc]] > 1):
             return False
 
-        #Make it so that pla is always the defender
         pla = self.board[loc]
         opp = Board.get_opp(pla)
 
-        arrSize = self.x_size * self.y_size * 2 #A bit bigger due to paranoia about recaptures making the sequence longer.
-
-        #Stack for the search. These are lists of possible moves to search at each level of the stack
+        arrSize = self.x_size * self.y_size * 2
+        
+        # Search state storage
         moveLists = [[] for i in range(arrSize)]
-        moveListCur = [0 for i in range(arrSize)] #Current move list idx searched, equal to -1 if list has not been generated.
-        records = [None for i in range(arrSize)] #Records so that we can undo moves as we search back up.
+        moveListCur = [0 for i in range(arrSize)]
+        records = [None for i in range(arrSize)]
         stackIdx = 0
 
         moveLists[0] = []
@@ -931,20 +1038,11 @@ class Board:
         returnValue = False
         returnedFromDeeper = False
 
-        #Clear the ko loc for the defender at the root node - assume all kos work for the defender
         saved_simple_ko_point = self.simple_ko_point
         if defenderFirst:
             self.simple_ko_point = None
 
-        # debug = True
-        # if debug:
-        #   print("SEARCHING " + str(self.loc_x(loc)) + " " + str(self.loc_y(loc)))
-
         while True:
-            # if debug:
-            #   print(str(stackIdx) + " " + str(moveListCur[stackIdx]) + "/" + str(len(moveLists[stackIdx])) + " " + str(returnValue) + " " + str(returnedFromDeeper))
-
-            #Returned from the root - so that's the answer
             if stackIdx <= -1:
                 assert(stackIdx == -1)
                 self.simple_ko_point = saved_simple_ko_point
@@ -952,267 +1050,228 @@ class Board:
 
             isDefender = (defenderFirst and (stackIdx % 2) == 0) or (not defenderFirst and (stackIdx % 2) == 1)
 
-            #We just entered this level?
+            # --- LEVEL ENTRY ---
             if moveListCur[stackIdx] == -1:
                 libs = self.group_liberty_count[self.group_head[loc]]
 
-                #Base cases.
-                #If we are the attacker and the group has only 1 liberty, we already win.
+                # Ladder Base Cases:
+                # 1. Attacker to move and defender in atari (1 lib) -> Attacker wins.
                 if not isDefender and libs <= 1:
                     returnValue = True
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
 
-                #If we are the attacker and the group has 3 liberties, we already lose.
+                # 2. Attacker to move and defender has 3 libs -> Defender escapes.
                 if not isDefender and libs >= 3:
                     returnValue = False
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
 
-                #If we are the defender and the group has 2 liberties, we already win.
+                # 3. Defender to move and has 2+ libs -> Defender escapes.
                 if isDefender and libs >= 2:
                     returnValue = False
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
 
-                #If we are the defender and the attacker left a simple ko point, assume we already win
-                #because we don't want to say yes on ladders that depend on kos
-                #This should also hopefully prevent any possible infinite loops - I don't know of any infinite loop
-                #that would come up in a continuous atari sequence that doesn't ever leave a simple ko point.
+                # 4. Defender to move and attacker left a ko point -> Assume defender escapes (avoid ko-bound ladders).
                 if isDefender and self.simple_ko_point is not None:
                     returnValue = False
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
 
-                #Otherwise we need to keep searching.
-                #Generate the move list. Attacker and defender generate moves on the group's liberties, but only the defender
-                #generates moves on surrounding capturable opposing groups.
+                # Generate moves for the current side.
                 if isDefender:
                     moveLists[stackIdx] = []
-                    self.findLibertyGainingCaptures(loc,moveLists[stackIdx])
-                    self.findLiberties(loc,moveLists[stackIdx])
+                    self.findLibertyGainingCaptures(loc, moveLists[stackIdx])
+                    self.findLiberties(loc, moveLists[stackIdx])
                 else:
                     moveLists[stackIdx] = []
-                    self.findLiberties(loc,moveLists[stackIdx])
+                    self.findLiberties(loc, moveLists[stackIdx])
                     assert(len(moveLists[stackIdx]) == 2)
 
-                    #Early quitouts if the liberties are not adjacent
-                    #(so that filling one doesn't fill an immediate liberty of the other)
                     move0 = moveLists[stackIdx][0]
                     move1 = moveLists[stackIdx][1]
-
                     libs0 = self.countImmediateLiberties(move0)
                     libs1 = self.countImmediateLiberties(move1)
 
-                    #If we are the attacker and we're in a double-ko death situation, then assume we win.
-                    #Both defender liberties must be ko mouths, connecting either ko mouth must not increase the defender's
-                    #liberties, and none of the attacker's surrounding stones can currently be in atari.
-                    #This is not complete - there are situations where the defender's connections increase liberties, or where
-                    #the attacker has stones in atari, but where the defender is still in inescapable atari even if they have
-                    #a large finite number of ko threats. But it's better than nothing.
-                    if libs0 == 0 and libs1 == 0 and self.wouldBeKoCapture(move0,opp) and self.wouldBeKoCapture(move1,opp) :
-                        if self.get_liberties_after_play(pla,move0,3) <= 2 and self.get_liberties_after_play(pla,move1,3) <= 2:
+                    # Attacker check: is this a double-ko death trap?
+                    if libs0 == 0 and libs1 == 0 and self.wouldBeKoCapture(move0, opp) and self.wouldBeKoCapture(move1, opp):
+                        if self.get_liberties_after_play(pla, move0, 3) <= 2 and self.get_liberties_after_play(pla, move1, 3) <= 2:
                             if self.hasLibertyGainingCaptures(loc):
                                 returnValue = True
                                 returnedFromDeeper = True
                                 stackIdx -= 1
                                 continue
 
-                    if not self.is_adjacent(move0,move1):
-                        #We lose automatically if both escapes get the defender too many libs
+                    # Automatic failure if both escape directions grant >= 3 liberties.
+                    if not self.is_adjacent(move0, move1):
                         if libs0 >= 3 and libs1 >= 3:
                             returnValue = False
                             returnedFromDeeper = True
                             stackIdx -= 1
                             continue
-                        #Move 1 is not possible, so shrink the list
                         elif libs0 >= 3:
                             moveLists[stackIdx] = [move0]
-                        #Move 0 is not possible, so shrink the list
                         elif libs1 >= 3:
                             moveLists[stackIdx] = [move1]
 
-                    #Order the two moves based on a simple heuristic - for each neighboring group with any liberties
-                    #count that the opponent could connect to, count liberties - 1.5.
+                    # Heuristic Move Ordering: search the most promising escape route first.
                     if len(moveLists[stackIdx]) > 1:
-                        libs0 += self.countHeuristicConnectionLiberties(move0,pla)
-                        libs1 += self.countHeuristicConnectionLiberties(move1,pla)
+                        libs0 += self.countHeuristicConnectionLiberties(move0, pla)
+                        libs1 += self.countHeuristicConnectionLiberties(move1, pla)
                         if libs1 > libs0:
                             moveLists[stackIdx][0] = move1
                             moveLists[stackIdx][1] = move0
 
-                #And indicate to begin search on the first move generated.
                 moveListCur[stackIdx] = 0
 
-            #Else, we returned from a deeper level (or the same level, via illegal move)
+            # --- RETURN FROM LEVEL ---
             else:
                 assert(moveListCur[stackIdx] >= 0)
-                assert(moveListCur[stackIdx] < len(moveLists[stackIdx]))
-                #If we returned from deeper we need to undo the move we made
                 if returnedFromDeeper:
                     self.undo(records[stackIdx])
 
-                #Defender has a move that is not ladder captured?
+                # Pruning: stop early if we found a winning path for the current side.
                 if isDefender and not returnValue:
-                    #Return! (returnValue is still false, as desired)
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
-
-                #Attacker has a move that does ladder capture?
                 if not isDefender and returnValue:
-                    #Return! (returnValue is still true, as desired)
                     returnedFromDeeper = True
                     stackIdx -= 1
                     continue
 
-                #Move on to the next move to search
                 moveListCur[stackIdx] += 1
 
-            #If there is no next move to search, then we lose.
+            # No more moves at this level? Side whose turn it was loses.
             if moveListCur[stackIdx] >= len(moveLists[stackIdx]):
-                #For a defender, that means a ladder capture.
-                #For an attacker, that means no ladder capture found.
                 returnValue = isDefender
                 returnedFromDeeper = True
                 stackIdx -= 1
                 continue
 
-
-            #Otherwise we do have an next move to search. Grab it.
+            # --- SEARCH NEXT NODE ---
             move = moveLists[stackIdx][moveListCur[stackIdx]]
-            p = (pla if isDefender else opp)
+            side = (pla if isDefender else opp)
 
-            # if debug:
-            #   print("play " + str(self.loc_x(move)) + " " + str(self.loc_y(move)) + " " + str(p))
-            #   print(self.to_string())
-
-            #Illegal move - treat it the same as a failed move, but don't return up a level so that we
-            #loop again and just try the next move.
-            if not self.would_be_legal(p,move):
+            if not self.would_be_legal(side, move):
                 returnValue = isDefender
                 returnedFromDeeper = False
-                #if(print) cout << "illegal " << endl;
                 continue
 
-            #Play and record the move!
-            records[stackIdx] = self.playRecordedUnsafe(p,move)
-
-            #And recurse to the next level
+            records[stackIdx] = self.playRecordedUnsafe(side, move)
             stackIdx += 1
             moveListCur[stackIdx] = -1
             moveLists[stackIdx] = []
 
 
+    # ─── Area Scoring & Life/Death ─────────────────────────────────────
+
     def calculateArea(self, result, nonPassAliveStones, safeBigTerritories, unsafeBigTerritories, isMultiStoneSuicideLegal):
+        """
+        Populate 'result' array with the area owner of each intersection.
+        
+        This uses Benson's Algorithm and flood-fills to determine territory 
+        and life/death.
+        """
         for i in range(self.arrsize):
             result[i] = Board.EMPTY
-        self.calculateAreaForPla(Board.BLACK,safeBigTerritories,unsafeBigTerritories,isMultiStoneSuicideLegal,result)
-        self.calculateAreaForPla(Board.WHITE,safeBigTerritories,unsafeBigTerritories,isMultiStoneSuicideLegal,result)
+            
+        self.calculateAreaForPla(Board.BLACK, safeBigTerritories, unsafeBigTerritories, isMultiStoneSuicideLegal, result)
+        self.calculateAreaForPla(Board.WHITE, safeBigTerritories, unsafeBigTerritories, isMultiStoneSuicideLegal, result)
 
         if nonPassAliveStones:
             for y in range(self.y_size):
                 for x in range(self.x_size):
-                    loc = self.loc(x,y)
+                    loc = self.loc(x, y)
                     if result[loc] == Board.EMPTY:
                         result[loc] = self.board[loc]
 
     def calculateNonDameTouchingArea(self, result, keepTerritories, keepStones, isMultiStoneSuicideLegal):
-        #First, just compute basic area.
+        """
+        Determine area but filter out 'dame' (neutral points) that touch both sides.
+        """
         basicArea = [Board.EMPTY for i in range(self.arrsize)]
         for i in range(self.arrsize):
             result[i] = Board.EMPTY
-        self.calculateAreaForPla(Board.BLACK,True,True,isMultiStoneSuicideLegal,basicArea)
-        self.calculateAreaForPla(Board.WHITE,True,True,isMultiStoneSuicideLegal,basicArea)
+        self.calculateAreaForPla(Board.BLACK, True, True, isMultiStoneSuicideLegal, basicArea)
+        self.calculateAreaForPla(Board.WHITE, True, True, isMultiStoneSuicideLegal, basicArea)
 
         for y in range(self.y_size):
             for x in range(self.x_size):
-                loc = self.loc(x,y)
+                loc = self.loc(x, y)
                 if basicArea[loc] == Board.EMPTY:
                     basicArea[loc] = self.board[loc]
 
-        self.calculateNonDameTouchingAreaHelper(basicArea,result)
+        self.calculateNonDameTouchingAreaHelper(basicArea, result)
 
         if keepTerritories:
             for y in range(self.y_size):
                 for x in range(self.x_size):
-                    loc = self.loc(x,y)
+                    loc = self.loc(x, y)
                     if basicArea[loc] != Board.EMPTY and basicArea[loc] != self.board[loc]:
                         result[loc] = basicArea[loc]
 
         if keepStones:
             for y in range(self.y_size):
                 for x in range(self.x_size):
-                    loc = self.loc(x,y)
+                    loc = self.loc(x, y)
                     if basicArea[loc] != Board.EMPTY and basicArea[loc] == self.board[loc]:
                         result[loc] = basicArea[loc]
 
-
     def calculateAreaForPla(self, pla, safeBigTerritories, unsafeBigTerritories, isMultiStoneSuicideLegal, result):
+        """
+        Core implementation of Benson's Algorithm for a specific player.
+        
+        Identifies 'pass-alive' groups that cannot be captured regardless of moves.
+        Iteratively 'kills' groups that don't have at least two vital liberties 
+        (eyes) until only safe groups remain.
+        """
         opp = self.get_opp(pla)
-        #First compute all empty-or-opp regions
 
-        #For each loc, if it's empty or opp, the head of the region
         regionHeadByLoc = [Board.PASS_LOC for i in range(self.arrsize)]
-        #For each loc, if it's empty or opp, the next empty or opp belonging to the same region
         nextEmptyOrOpp = [Board.PASS_LOC for i in range(self.arrsize)]
-        #Does this border a pla group that has been marked as not pass alive?
         bordersNonPassAlivePlaByHead = [False for i in range(self.arrsize)]
 
-        #A list for each region head, indicating which pla group heads the region is vital for.
-        #A region is vital for a pla group if all its spaces are adjacent to that pla group.
-        #All lists are concatenated together, the most we can have is bounded by (MAX_LEN * MAX_LEN+1) / 2
-        #independent regions, each one vital for at most 4 pla groups, add some extra just in case.
         maxRegions = (self.x_size * self.y_size + 1)//2 + 1
         vitalForPlaHeadsListsMaxLen = maxRegions * 4
         vitalForPlaHeadsLists = [-1 for i in range(vitalForPlaHeadsListsMaxLen)]
         vitalForPlaHeadsListsTotal = 0
 
-        #A list of region heads
         numRegions = 0
         regionHeads = [-1 for i in range(maxRegions)]
-        #Start indices and list lengths in vitalForPlaHeadsLists
         vitalStart = [-1 for i in range(maxRegions)]
         vitalLen = [-1 for i in range(maxRegions)]
-        #For each region, are there 0, 1, or 2+ spaces of that region not bordering any pla?
         numInternalSpacesMax2 = [-1 for i in range(maxRegions)]
         containsOpp = [False for i in range(maxRegions)]
 
-        def isAdjacentToPlaHead(loc,plaHead):
+        def isAdjacentToPlaHead(loc, plaHead):
             for i in range(4):
                 adj = loc + self.adj[i]
                 if self.board[adj] == pla and self.group_head[adj] == plaHead:
                     return True
             return False
 
-        #Recursively trace maximal non-pla regions of the board and record their properties and join them into a
-        #linked list through nextEmptyOrOpp.
-        #Takes as input the location serving as the head, the tip node of the linked list so far, the next loc, and the
-        #numeric index of the region
-        #Returns the loc serving as the current tip node ("tailTarget") of the linked list.
         def buildRegion(head, tailTarget, loc, regionIdx):
-            #Already traced this location, skip
+            """Identify a contiguous region of non-player intersections."""
             if regionHeadByLoc[loc] != Board.PASS_LOC:
                 return tailTarget
             regionHeadByLoc[loc] = head
 
-            #First, filter out any pla heads it turns out we're not vital for because we're not adjacent to them
-            #In the case where suicide is allowed, we only do this filtering on intersections that are actually empty
             if isMultiStoneSuicideLegal or self.board[loc] == Board.EMPTY:
                 vStart = vitalStart[regionIdx]
                 oldVLen = vitalLen[regionIdx]
                 newVLen = 0
                 for i in range(oldVLen):
-                    if isAdjacentToPlaHead(loc,vitalForPlaHeadsLists[vStart+i]):
+                    if isAdjacentToPlaHead(loc, vitalForPlaHeadsLists[vStart+i]):
                         vitalForPlaHeadsLists[vStart+newVLen] = vitalForPlaHeadsLists[vStart+i]
                         newVLen += 1
                 vitalLen[regionIdx] = newVLen
 
-            #Determine if this point is internal, unless we already have many internal points
             if numInternalSpacesMax2[regionIdx] < 2:
                 isInternal = True
                 for i in range(4):
@@ -1226,21 +1285,19 @@ class Board:
             if self.board[loc] == opp:
                 containsOpp[regionIdx] = True
 
-            #Next, recurse everywhere
             nextEmptyOrOpp[loc] = tailTarget
             nextTailTarget = loc
             for i in range(4):
                 adj = loc + self.adj[i]
                 if self.board[adj] == Board.EMPTY or self.board[adj] == opp:
-                    nextTailTarget = buildRegion(head,nextTailTarget,adj,regionIdx)
+                    nextTailTarget = buildRegion(head, nextTailTarget, adj, regionIdx)
 
             return nextTailTarget
 
         atLeastOnePla = False
         for y in range(self.y_size):
             for x in range(self.x_size):
-                loc = self.loc(x,y)
-
+                loc = self.loc(x, y)
                 if regionHeadByLoc[loc] != Board.PASS_LOC:
                     continue
                 if self.board[loc] != Board.EMPTY:
@@ -1249,9 +1306,6 @@ class Board:
 
                 regionIdx = numRegions
                 numRegions += 1
-                assert(numRegions <= maxRegions)
-
-                #Initialize region metadata
                 head = loc
                 regionHeads[regionIdx] = head
                 vitalStart[regionIdx] = vitalForPlaHeadsListsTotal
@@ -1259,9 +1313,7 @@ class Board:
                 numInternalSpacesMax2[regionIdx] = 0
                 containsOpp[regionIdx] = False
 
-                #Fill in all adjacent pla heads as vital, which will get filtered during buildRegion
                 vStart = vitalStart[regionIdx]
-                assert(vStart + 4 <= vitalForPlaHeadsListsMaxLen)
                 initialVLen = 0
                 for i in range(4):
                     adj = loc + self.adj[i]
@@ -1272,94 +1324,73 @@ class Board:
                             if vitalForPlaHeadsLists[vStart+j] == plaHead:
                                 alreadyPresent = True
                                 break
-
                         if not alreadyPresent:
                             vitalForPlaHeadsLists[vStart+initialVLen] = plaHead
                             initialVLen += 1
-
                 vitalLen[regionIdx] = initialVLen
 
-                tailTarget = buildRegion(head,head,loc,regionIdx)
+                tailTarget = buildRegion(head, head, loc, regionIdx)
                 nextEmptyOrOpp[head] = tailTarget
-
                 vitalForPlaHeadsListsTotal += vitalLen[regionIdx]
 
-        #Also accumulate all player heads
-        numPlaHeads = 0
         allPlaHeads = []
-
-        #Accumulate with duplicates
         for y in range(self.y_size):
             for x in range(self.x_size):
-                loc = self.loc(x,y)
+                loc = self.loc(x, y)
                 if self.board[loc] == pla:
                     allPlaHeads.append(self.group_head[loc])
-                    numPlaHeads += 1
-
-        #Filter duplicates
         allPlaHeads = list(set(allPlaHeads))
         numPlaHeads = len(allPlaHeads)
 
         plaHasBeenKilled = [False for i in range(numPlaHeads)]
-
-        #Now, we can begin the benson iteration
         vitalCountByPlaHead = [0 for i in range(self.arrsize)]
-        while(True):
-            #Zero out vital liberties by head
+        
+        # --- Benson Iteration ---
+        while True:
             for i in range(numPlaHeads):
                 vitalCountByPlaHead[allPlaHeads[i]] = 0
 
-            #Walk all regions that are still bordered only by pass-alive stuff and accumulate a vital liberty to each pla it is vital for.
             for i in range(numRegions):
                 head = regionHeads[i]
                 if bordersNonPassAlivePlaByHead[head]:
                     continue
-
                 vStart = vitalStart[i]
                 vLen = vitalLen[i]
                 for j in range(vLen):
                     plaHead = vitalForPlaHeadsLists[vStart+j]
                     vitalCountByPlaHead[plaHead] += 1
 
-            #Walk all player heads and kill them if they haven't accumulated at least 2 vital liberties
             killedAnything = False
             for i in range(numPlaHeads):
-                #Already killed - skip
                 if plaHasBeenKilled[i]:
                     continue
-
                 plaHead = allPlaHeads[i]
                 if vitalCountByPlaHead[plaHead] < 2:
                     plaHasBeenKilled[i] = True
                     killedAnything = True
-                    #Walk the pla chain to update bordering regions
                     cur = plaHead
-                    while(True):
+                    while True:
                         for j in range(4):
                             adj = cur + self.adj[j]
                             if self.board[adj] == Board.EMPTY or self.board[adj] == opp:
                                 bordersNonPassAlivePlaByHead[regionHeadByLoc[adj]] = True
-
                         cur = self.group_next[cur]
-
                         if cur == plaHead:
                             break
-
             if not killedAnything:
                 break
 
-        #Mark result with pass-alive groups
+        # Record results
         for i in range(numPlaHeads):
             if not plaHasBeenKilled[i]:
                 plaHead = allPlaHeads[i]
                 cur = plaHead
-                while(True):
+                while True:
                     result[cur] = pla
                     cur = self.group_next[cur]
                     if cur == plaHead:
                         break
 
-        #Mark result with territory
         for i in range(numRegions):
             head = regionHeads[i]
             shouldMark = numInternalSpacesMax2[i] <= 1 and atLeastOnePla and not bordersNonPassAlivePlaByHead[head]
@@ -1368,49 +1399,34 @@ class Board:
 
             if shouldMark:
                 cur = head
-                while(True):
+                while True:
                     result[cur] = pla
                     cur = nextEmptyOrOpp[cur]
                     if cur == head:
                         break
 
     def calculateNonDameTouchingAreaHelper(self, basicArea, result):
+        """Internal floodfill helper to identify areas not touching dame."""
         queue = [Board.PASS_LOC for i in range(self.arrsize)]
-
-        #Iterate through all the regions that players own via area scoring and mark
-        #all the ones that are touching dame
         isDameTouching = [False for i in range(self.arrsize)]
-
         queueHead = 0
         queueTail = 0
 
-        ADJ0 = self.adj[0]
-        ADJ1 = self.adj[1]
-        ADJ2 = self.adj[2]
-        ADJ3 = self.adj[3]
-
+        ADJ = self.adj
         for y in range(self.y_size):
             for x in range(self.x_size):
-                loc = self.loc(x,y)
+                loc = self.loc(x, y)
                 if basicArea[loc] != Board.EMPTY and not isDameTouching[loc]:
-                    #Touches dame?
-                    if((self.board[loc+ADJ0] == Board.EMPTY and basicArea[loc+ADJ0] == Board.EMPTY) or
-                       (self.board[loc+ADJ1] == Board.EMPTY and basicArea[loc+ADJ1] == Board.EMPTY) or
-                       (self.board[loc+ADJ2] == Board.EMPTY and basicArea[loc+ADJ2] == Board.EMPTY) or
-                       (self.board[loc+ADJ3] == Board.EMPTY and basicArea[loc+ADJ3] == Board.EMPTY)):
-
+                    if any(self.board[loc+d] == Board.EMPTY and basicArea[loc+d] == Board.EMPTY for d in ADJ):
                         pla = basicArea[loc]
                         isDameTouching[loc] = True
                         queue[queueTail] = loc
                         queueTail += 1
                         while queueHead != queueTail:
-                            #Pop next location off queue
                             nextLoc = queue[queueHead]
                             queueHead += 1
-
-                            #Look all around it, floodfill
-                            for j in range(4):
-                                adj = nextLoc + self.adj[j]
+                            for d in ADJ:
+                                adj = nextLoc + d
                                 if basicArea[adj] == pla and not isDameTouching[adj]:
                                     isDameTouching[adj] = True
                                     queue[queueTail] = adj
@@ -1418,63 +1434,48 @@ class Board:
 
         queueHead = 0
         queueTail = 0
-
-        #Now, walk through and copy all non-dame-touching basic areas into the result counting
-        #how many there are.
         for y in range(self.y_size):
             for x in range(self.x_size):
-                loc = self.loc(x,y)
+                loc = self.loc(x, y)
                 if basicArea[loc] != Board.EMPTY and not isDameTouching[loc] and result[loc] != basicArea[loc]:
                     pla = basicArea[loc]
                     result[loc] = basicArea[loc]
                     queue[queueTail] = loc
                     queueTail += 1
                     while queueHead != queueTail:
-                        #Pop next location off queue
                         nextLoc = queue[queueHead]
                         queueHead += 1
-
-                        #Look all around it, floodfill
-                        for j in range(4):
-                            adj = nextLoc + self.adj[j]
+                        for d in ADJ:
+                            adj = nextLoc + d
                             if basicArea[adj] == pla and result[adj] != basicArea[adj]:
                                 result[adj] = basicArea[adj]
                                 queue[queueTail] = adj
                                 queueTail += 1
 
+    # ─── Miscellaneous Utilities ────────────────────────────────────────
+
     def to_sgfpos_str(self):
-        out = ""
+        """Return a compact string representation for debug/storage."""
+        out = []
         for y in range(self.y_size):
+            row = []
             for x in range(self.x_size):
-                loc = self.loc(x,y)
-                if self.board[loc] == 1:
-                    out += "X"
-                elif self.board[loc] == 2:
-                    out += "O"
-                else:
-                    out += "."
-            out += "/"
-        return out[:-1]
+                v = self.board[self.loc(x, y)]
+                row.append("X" if v == 1 else ("O" if v == 2 else "."))
+            out.append("".join(row))
+        return "/".join(out)
 
     def num_stones(self):
-        num_stones = 0
-        for y in range(self.y_size):
-            for x in range(self.x_size):
-                loc = self.loc(x,y)
-                if self.board[loc] == 1:
-                    num_stones += 1
-                elif self.board[loc] == 2:
-                    num_stones += 1
-        return num_stones
+        """Return the total number of stones on the board."""
+        return int(np.sum((self.board == Board.BLACK) | (self.board == Board.WHITE)))
 
-
-    def pla_to_char(self,pla):
+    def pla_to_char(self, pla):
+        """Convert player constant to human-readable character."""
         return "EBW#"[pla]
 
-    def loc_to_str(self,loc):
-        colstr = 'ABCDEFGHJKLMNOPQRST'
+    def loc_to_str(self, loc):
+        """Convert a 1D loc to GTP-style coordinate (e.g. 'E5')."""
+        colstr = 'ABCDEFGHJKLMNOPQRST' # Note: 'I' is skipped in Go
         if loc == Board.PASS_LOC:
             return 'pass'
-        x = self.loc_x(loc)
-        y = self.loc_y(loc)
-        return '%c%d' % (colstr[x], self.y_size - y)
+        return '%c%d' % (colstr[self.loc_x(loc)], self.y_size - self.loc_y(loc))

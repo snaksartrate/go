@@ -1,5 +1,17 @@
-engine/__pycache__/
-engine/actual_katago_files
-material/
-notes/
+# Ignore everything by default
+/*
 
+# Allow the .gitignore itself
+!.gitignore
+
+# Allow the README
+!readme.md
+
+# Allow the engine directory structure
+!engine/
+
+# Ignore everything inside engine (including __pycache__ and sub-directories)
+engine/*
+
+# But allow all Python source files in engine
+!engine/*.py
